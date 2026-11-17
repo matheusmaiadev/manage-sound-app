@@ -1,6 +1,6 @@
 # Modos de Som (Manage Sound Mode) — Android Native App
 
-[![Android CI/CD — Google Play Store](https://github.com/martwilldev/manage-sound-app/actions/workflows/android-ci-cd.yml/badge.svg)](https://github.com/martwilldev/manage-sound-app/actions/workflows/android-ci-cd.yml)
+[![Android CI/CD — Google Play Store](https://github.com/matheusmaiadev/manage-sound-app/actions/workflows/android-ci-cd.yml/badge.svg)](https://github.com/matheusmaiadev/manage-sound-app/actions/workflows/android-ci-cd.yml)
 ![Kotlin 2.3.20](https://img.shields.io/badge/Kotlin-2.3.20-7F52FF?logo=kotlin&logoColor=white)
 ![Android SDK 36](https://img.shields.io/badge/Target%20SDK-36%20(Android%2016)-3DDC84?logo=android&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM%202026.03-4285F4?logo=jetpackcompose&logoColor=white)

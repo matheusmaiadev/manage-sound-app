@@ -30,5 +30,5 @@ O **Modos de Som (Manage Sound Mode)** foi projetado sob os princípios de **Pri
 Se você identificar qualquer vulnerabilidade de segurança neste repositório:
 
 1. **Não abra uma Issue pública** contendo detalhes de exploração.
-2. Utilize a aba **[Security > Report a vulnerability](https://github.com/martwilldev/manage-sound-app/security/advisories/new)** (*GitHub Private Vulnerability Reporting*) para enviar o relato de forma privada diretamente ao mantenedor (`@martwilldev`).
+2. Utilize a aba **[Security > Report a vulnerability](https://github.com/matheusmaiadev/manage-sound-app/security/advisories/new)** (*GitHub Private Vulnerability Reporting*) para enviar o relato de forma privada diretamente ao mantenedor (`@matheusmaiadev`).
 3. Você receberá uma confirmação inicial em até **48 horas** com o plano de triagem e correção.

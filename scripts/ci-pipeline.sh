@@ -17,12 +17,22 @@ WORKSPACE_STORE_DIR="$(cd "$REPO_DIR/../.." 2>/dev/null && pwd)/docs/store"
 
 cd "$REPO_DIR"
 
-# Carrega automaticamente o arquivo .env (físico ou FIFO virtual do 1Password) se existir
+# Carrega automaticamente o arquivo .env (físico ou FIFO virtual do 1Password, compatível com macOS Bash 3.2)
 if [[ -e "$REPO_DIR/.env" || -p "$REPO_DIR/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$REPO_DIR/.env"
-  set +a
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      key="${BASH_REMATCH[2]}"
+      val="${BASH_REMATCH[3]}"
+      if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+        val="${BASH_REMATCH[1]}"
+      elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+        val="${BASH_REMATCH[1]}"
+      fi
+      export "$key=$val"
+    fi
+  done < "$REPO_DIR/.env"
 fi
 
 BUMP_MODE=""

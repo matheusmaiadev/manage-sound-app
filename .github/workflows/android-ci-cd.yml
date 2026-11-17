@@ -62,7 +62,7 @@ jobs:
     needs: quality-gate
     # Roda apenas no repositório oficial e nunca em Pull Requests externos
     if: >-
-      github.repository == 'martwilldev/manage-sound-app' &&
+      github.repository == 'matheusmaiadev/manage-sound-app' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     runs-on: ubuntu-latest
@@ -100,8 +100,9 @@ jobs:
           fi
           trap 'rm -rf app/keystore app/build/outputs/bundle app/build/outputs/apk app/build/outputs/mapping' EXIT
 
-          export APP_VERSION_CODE=$((4 + GITHUB_RUN_NUMBER))
-          echo "Building Release with APP_VERSION_CODE=${APP_VERSION_CODE}"
+          PROP_CODE=$(grep -E '^VERSION_CODE=' version.properties | cut -d'=' -f2 || echo "8")
+          export APP_VERSION_CODE=$((PROP_CODE + GITHUB_RUN_NUMBER))
+          echo "Building Release with APP_VERSION_CODE=${APP_VERSION_CODE} (base=${PROP_CODE} + run=${GITHUB_RUN_NUMBER})"
           chmod +x ./gradlew
           ./gradlew bundleRelease --no-daemon
           rm -f app/keystore/manage-sound-release.jks

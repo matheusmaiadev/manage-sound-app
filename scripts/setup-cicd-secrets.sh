@@ -52,11 +52,28 @@ else
   exit 1
 fi
 
-# Carrega variáveis do .env local
-set -a
-# shellcheck disable=SC1091
-source "$REPO_DIR/.env"
-set +a
+# Carrega variáveis do .env local (compatível com arquivo físico e FIFO virtual do 1Password no macOS Bash 3.2)
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%$'\r'}"
+  [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
+  if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+    key="${BASH_REMATCH[2]}"
+    val="${BASH_REMATCH[3]}"
+    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    fi
+    export "$key=$val"
+  fi
+done < "$REPO_DIR/.env"
+
+for req_var in RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD; do
+  if [[ -z "${!req_var:-}" ]]; then
+    echo "❌ Erro: Variável obrigatória '$req_var' está vazia ou ausente no .env." >&2
+    exit 1
+  fi
+done
 
 # Instala automaticamente o Git Pre-Commit Security Guard contra vazamentos
 if [[ -d "$REPO_DIR/.git/hooks" ]] && [[ -f "$REPO_DIR/scripts/git-pre-commit-guard.sh" ]]; then

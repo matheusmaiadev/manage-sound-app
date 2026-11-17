@@ -9,7 +9,7 @@
 
 * **Nome**: `manage-sound-app` (`com.managesoundmode.app`)
 * **Descrição**: Aplicativo Android nativo 100% *on-device* para gerenciamento, perfis e automação contextual de modos de som, horários e locais/Wi-Fi.
-* **Repositório Público (Portfólio & Produção)**: `https://github.com/martwilldev/manage-sound-app`
+* **Repositório Público (Portfólio & Produção)**: `https://github.com/matheusmaiadev/manage-sound-app`
 * **Stack Principal**:
   * **Android Gradle Plugin (AGP)**: `9.0.1` (JDK 17 toolchain, `compileSdk = 36`, `targetSdk = 36`, `minSdk = 29`)
   * **Kotlin**: `2.3.20` (`compose`, `serialization`)
@@ -41,7 +41,7 @@
 ```text
 manage-sound-app/
 ├── .github/
-│   ├── CODEOWNERS                  # Exige revisão de @martwilldev em qualquer PR
+│   ├── CODEOWNERS                  # Exige revisão de @matheusmaiadev em qualquer PR
 │   └── workflows/android-ci-cd.yml # Esteira CI/CD blindada (Quality Gate + Google Play API v3)
 ├── app/
 │   ├── build.gradle.kts

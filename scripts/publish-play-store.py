@@ -133,6 +133,7 @@ def main() -> int:
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaFileUpload
     except ImportError:
         print(
@@ -157,6 +158,20 @@ def main() -> int:
     print("1/4 Criando sessão de edição (Edit) na Google Play API...")
     edit_request = edits.insert(body={}, packageName=args.package_name)
     edit_id = edit_request.execute()["id"]
+
+    if args.dry_run:
+        tracks_resp = edits.tracks().list(editId=edit_id, packageName=args.package_name).execute()
+        active_codes: list[int] = []
+        for t in tracks_resp.get("tracks", []):
+            for rel in t.get("releases", []):
+                active_codes.extend(int(c) for c in rel.get("versionCodes", []))
+        edits.delete(editId=edit_id, packageName=args.package_name).execute()
+        highest = max(active_codes) if active_codes else 0
+        print(
+            f"✅ [DRY-RUN] Autenticação Google Play API v3 OK! Maior versionCode publicado: {highest} "
+            f"(use --bump antes de --deploy para publicar versionCode >= {highest + 1})."
+        )
+        return 0
 
     print(f"2/4 Fazendo upload do App Bundle ({aab_path.name})...")
     bundle_response = (
