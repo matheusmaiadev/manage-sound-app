@@ -31,6 +31,7 @@ import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SoundState
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.VolumeStreamType
@@ -395,8 +396,11 @@ class ManageSoundModeE2ETest {
 
     // 6. Agora como Admin, alternar modo para Silêncio + Vibrar e iniciar Timer de 30m funciona normalmente
     composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
+    composeRule.waitUntil(5_000L) {
+      app.container.soundSystemController.readSoundState().audioMode == BaseAudioMode.SILENT
+    }
     composeRule.waitForIdle()
-    composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).performClick()
+    composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).performScrollTo().performClick()
     composeRule.waitForIdle()
     val prefsAfterAllowedAction = awaitPrefs { it.activeTimer != null }
     assertNotNull(prefsAfterAllowedAction.activeTimer)
@@ -483,6 +487,7 @@ class ManageSoundModeE2ETest {
 
     val prefsAfterToggleOff = awaitPrefs { !it.systemZenRulesEnabled }
     assertEquals(false, prefsAfterToggleOff.systemZenRulesEnabled)
+    composeRule.waitUntil(5_000L) { SystemZenRuleManager.countRegisteredRules(app) == 0 }
     assertEquals(0, SystemZenRuleManager.countRegisteredRules(app))
   }
 
@@ -797,6 +802,149 @@ class ManageSoundModeE2ETest {
         app.container.soundModeRepository.setAppLanguageCode("PT_BR")
         app.container.preferencesDataSource.setAutomationsPaused(false)
         app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
+      }
+    }
+  }
+
+  @Test
+  fun e2e10_spec007_sevenRealAudioStreamsMinVolumeFloorInlineLinkAntiJumpAndFixedBarsDrawer() {
+    val audioManager = app.getSystemService(AudioManager::class.java)!!
+    val controller = app.container.soundSystemController
+    val repo = app.container.soundModeRepository
+
+    try {
+      runBlocking {
+        app.container.preferencesDataSource.setAutomationsPaused(true)
+        repo.setSoundState(SoundState(BaseAudioMode.SOUND, true))
+        repo.refreshSystemState()
+      }
+      composeRule.waitForIdle()
+
+      // 1. AC-01: Real AudioManager 7 streams + getStreamMinVolume floor enforcement
+      val callMinIndex = audioManager.getStreamMinVolume(AudioManager.STREAM_VOICE_CALL)
+      val callMinPercent = controller.readStreamMinPercent(VolumeStreamType.VOICE_CALL)
+      if (callMinIndex > 0) {
+        assertTrue(callMinPercent > 0)
+      }
+      runBlocking {
+        repo.setStreamVolume(VolumeStreamType.VOICE_CALL, 0).getOrThrow()
+        repo.setStreamVolume(VolumeStreamType.ALARM, 0).getOrThrow()
+        repo.setStreamVolume(VolumeStreamType.SYSTEM, 60).getOrThrow()
+        repo.setStreamVolume(VolumeStreamType.ACCESSIBILITY, 75).getOrThrow()
+      }
+      assertTrue(
+        audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL) >= callMinIndex,
+      )
+      assertTrue(
+        audioManager.getStreamVolume(AudioManager.STREAM_ALARM) >=
+          audioManager.getStreamMinVolume(AudioManager.STREAM_ALARM),
+      )
+      assertTrue(controller.readVolumeStreams().systemPercent > 0)
+      assertTrue(controller.readVolumeStreams().accessibilityPercent > 0)
+
+      // 2. AC-02: Default ringNotificationLinked = true syncs RING & NOTIFICATION; inline button toggles DataStore
+      runBlocking {
+        repo.setStreamVolume(VolumeStreamType.RING, 72).getOrThrow()
+      }
+      val linkedSnap = controller.readVolumeStreams()
+      assertEquals(linkedSnap.ringPercent, linkedSnap.notificationPercent)
+
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamLinkButton(VolumeStreamType.RING))
+        .performScrollTo()
+        .assertIsDisplayed()
+        .performClick()
+      composeRule.waitForIdle()
+
+      val prefsUnlinked = awaitPrefs("unlinked") { !it.ringNotificationLinked }
+      assertEquals(false, prefsUnlinked.ringNotificationLinked)
+
+      // 3. AC-03: Default 4 fixed bars + Secondary Drawer collapsed -> click expands and persists secondaryDrawerExpanded
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.SYSTEM))
+        .assertDoesNotExist()
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.SECONDARY_DRAWER_TOGGLE)
+        .performScrollTo()
+        .assertIsDisplayed()
+        .performClick()
+      composeRule.waitForIdle()
+
+      val prefsDrawerOpen = awaitPrefs("drawerExpanded") { it.secondaryDrawerExpanded }
+      assertTrue(prefsDrawerOpen.secondaryDrawerExpanded)
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.SYSTEM))
+        .performScrollTo()
+        .assertIsDisplayed()
+
+      // Collapse drawer again and verify anti-jump MOST_USED: adjusting ACCESSIBILITY 4x keeps it in drawer until next tab entry
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.SECONDARY_DRAWER_TOGGLE)
+        .performScrollTo()
+        .performClick()
+      composeRule.waitForIdle()
+      awaitPrefs("drawerCollapsed") { !it.secondaryDrawerExpanded }
+
+      runBlocking {
+        repeat(4) {
+          repo.setStreamVolume(VolumeStreamType.ACCESSIBILITY, 80).getOrThrow()
+        }
+      }
+      composeRule.waitForIdle()
+      val prefsWithUsage = awaitPrefs("a11yUsage") {
+        (it.streamUsageCounts[VolumeStreamType.ACCESSIBILITY] ?: 0) >= 5
+      }
+      assertTrue((prefsWithUsage.streamUsageCounts[VolumeStreamType.ACCESSIBILITY] ?: 0) >= 5)
+      // Still hidden in drawer during active Now session (anti-jump!)
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.ACCESSIBILITY))
+        .assertDoesNotExist()
+
+      // Switch to Perfis and back to Agora -> new session latches updated MOST_USED ranking and promotes ACCESSIBILITY to #1 fixed bar!
+      composeRule.onNodeWithTag(AppTestTags.Tabs.PROFILES).performClick()
+      composeRule.waitForIdle()
+      composeRule.onNodeWithTag(AppTestTags.Tabs.NOW).performClick()
+      composeRule.waitForIdle()
+
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.ACCESSIBILITY))
+        .performScrollTo()
+        .assertIsDisplayed()
+
+      // 4. AC-04: Settings › Áudio e Timer -> 7 fixed bars hides drawer button completely
+      composeRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+      composeRule.onNodeWithTag(AppTestTags.TopBar.MENU_SETTINGS).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_AUDIO_MEDIA).performClick()
+
+      composeRule
+        .onNodeWithTag(AppTestTags.Settings.fixedStreamsCountChip(7))
+        .performScrollTo()
+        .performClick()
+      composeRule.waitForIdle()
+      awaitPrefs("fixed7") { it.visibleFixedStreamsCount == 7 }
+
+      composeRule
+        .onNodeWithTag(AppTestTags.Settings.streamSortModeButton(StreamSortMode.MANUAL))
+        .performScrollTo()
+        .performClick()
+      composeRule.waitForIdle()
+      awaitPrefs("manualSort") { it.streamSortMode == StreamSortMode.MANUAL }
+
+      composeRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SETTINGS_BUTTON).performClick()
+      composeRule.waitForIdle()
+
+      composeRule.onNodeWithTag(AppTestTags.Now.SECONDARY_DRAWER_TOGGLE).assertDoesNotExist()
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.SYSTEM))
+        .performScrollTo()
+        .assertIsDisplayed()
+    } finally {
+      runBlocking {
+        app.container.preferencesDataSource.resetFactoryDefaults()
+        app.container.preferencesDataSource.setOnboardingCompleted(true)
+        app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
+        app.container.soundModeRepository.refreshSystemState()
       }
     }
   }

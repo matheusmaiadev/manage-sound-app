@@ -51,6 +51,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
@@ -94,6 +96,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -132,6 +135,7 @@ import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.SoundState
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.VolumeStreamType
@@ -149,6 +153,7 @@ import com.managesoundmode.app.ui.components.ProminentLocationDisclosureDialog
 import com.managesoundmode.app.ui.components.ZenithSplitModeAndVibrateRow
 import com.managesoundmode.app.ui.components.audioModeIcon
 import com.managesoundmode.app.ui.components.profileIconForKey
+import com.managesoundmode.app.ui.components.streamIcon
 import com.managesoundmode.app.ui.theme.LocalZenithIsDark
 import com.managesoundmode.app.ui.theme.ManageSoundModeTheme
 import com.managesoundmode.app.ui.theme.onActivePillColor
@@ -445,6 +450,13 @@ fun MainScreen(
           onSetSystemZenRulesEnabled = viewModel::onSetSystemZenRulesEnabled,
           onSyncSystemZenRulesNow = viewModel::onSyncSystemZenRulesNow,
           onSyncBackgroundGeofencesNow = viewModel::onSyncBackgroundGeofencesNow,
+          onToggleRingNotificationLink = viewModel::onToggleRingNotificationLink,
+          onSetRingNotificationLinked = viewModel::onSetRingNotificationLinked,
+          onSetVisibleFixedStreamsCount = viewModel::onSetVisibleFixedStreamsCount,
+          onSetStreamSortMode = viewModel::onSetStreamSortMode,
+          onMoveStreamInManualOrder = viewModel::onMoveStreamInManualOrder,
+          onSetSecondaryDrawerExpanded = viewModel::onSetSecondaryDrawerExpanded,
+          onLatchStreamOrder = viewModel::onLatchStreamOrder,
           modifier = modifier,
         )
       }
@@ -537,6 +549,13 @@ internal fun MainDashboardContent(
   onSetSystemZenRulesEnabled: (Boolean) -> Unit = {},
   onSyncSystemZenRulesNow: () -> Unit = {},
   onSyncBackgroundGeofencesNow: () -> Unit = {},
+  onToggleRingNotificationLink: () -> Unit = {},
+  onSetRingNotificationLinked: (Boolean) -> Unit = {},
+  onSetVisibleFixedStreamsCount: (Int) -> Unit = {},
+  onSetStreamSortMode: (StreamSortMode) -> Unit = {},
+  onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
+  onSetSecondaryDrawerExpanded: (Boolean) -> Unit = {},
+  onLatchStreamOrder: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val snackbarHostState = remember { SnackbarHostState() }
@@ -582,11 +601,14 @@ internal fun MainDashboardContent(
       defaultMode = state.currentMode,
       defaultSoundState = state.currentSoundState,
       defaultStreams = state.streams,
+      streamMinPercents = state.streamMinPercents,
+      ringNotificationLinkedDefault = state.ringNotificationLinked,
       onSaveProfile = { profile, applyNow ->
         showProfileBottomSheet = false
         editingProfile = null
         onUpsertProfile(profile, applyNow)
         if (applyNow) {
+          onLatchStreamOrder()
           selectedTab = MainAppTab.NOW
         }
       },
@@ -731,7 +753,10 @@ internal fun MainDashboardContent(
 
   if (showSettingsFullScreen) {
     Dialog(
-      onDismissRequest = { showSettingsFullScreen = false },
+      onDismissRequest = {
+        showSettingsFullScreen = false
+        onLatchStreamOrder()
+      },
       properties = DialogProperties(
         usePlatformDefaultWidth = false,
         dismissOnClickOutside = false,
@@ -745,7 +770,10 @@ internal fun MainDashboardContent(
           TopAppBar(
             navigationIcon = {
               IconButton(
-                onClick = { showSettingsFullScreen = false },
+                onClick = {
+                  showSettingsFullScreen = false
+                  onLatchStreamOrder()
+                },
                 modifier = Modifier.testTag(AppTestTags.Settings.CLOSE_SETTINGS_BUTTON),
               ) {
                 Icon(
@@ -808,6 +836,10 @@ internal fun MainDashboardContent(
           onUnlockAdminWithPin = onUnlockAdminWithPin,
           onSetSystemZenRulesEnabled = onSetSystemZenRulesEnabled,
           onSyncSystemZenRulesNow = onSyncSystemZenRulesNow,
+          onSetRingNotificationLinked = onSetRingNotificationLinked,
+          onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
+          onSetStreamSortMode = onSetStreamSortMode,
+          onMoveStreamInManualOrder = onMoveStreamInManualOrder,
           modifier = Modifier.padding(settingsPadding),
         )
       }
@@ -818,7 +850,10 @@ internal fun MainDashboardContent(
     SettingsCategoryFullScreenDialog(
       category = globalSettingsDialogCategory!!,
       state = state,
-      onDismiss = { globalSettingsDialogCategory = null },
+      onDismiss = {
+        globalSettingsDialogCategory = null
+        onLatchStreamOrder()
+      },
       onSetRestorePolicy = onSetRestorePolicy,
       onSetDefaultDayProfileId = onSetDefaultDayProfileId,
       onSetThemeMode = onSetThemeMode,
@@ -856,6 +891,10 @@ internal fun MainDashboardContent(
       onSetAccessPin = onSetAccessPin,
       onSetSystemZenRulesEnabled = onSetSystemZenRulesEnabled,
       onSyncSystemZenRulesNow = onSyncSystemZenRulesNow,
+      onSetRingNotificationLinked = onSetRingNotificationLinked,
+      onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
+      onSetStreamSortMode = onSetStreamSortMode,
+      onMoveStreamInManualOrder = onMoveStreamInManualOrder,
     )
   }
 
@@ -1199,7 +1238,12 @@ internal fun MainDashboardContent(
       ZenithFloatingPillNavigationBar(
         selectedTab = selectedTab,
         activeAccent = modeAccent,
-        onSelectTab = { selectedTab = it },
+        onSelectTab = { nextTab ->
+          if (nextTab == MainAppTab.NOW && selectedTab != MainAppTab.NOW) {
+            onLatchStreamOrder()
+          }
+          selectedTab = nextTab
+        },
       )
     },
   ) { innerPadding ->
@@ -1210,6 +1254,8 @@ internal fun MainDashboardContent(
           onSelectAudioMode = onSelectAudioMode,
           onToggleVibrate = onToggleVibrate,
           onStreamVolumeChange = onStreamVolumeChange,
+          onToggleRingNotificationLink = onToggleRingNotificationLink,
+          onSetSecondaryDrawerExpanded = onSetSecondaryDrawerExpanded,
           onOpenProfilesTab = { selectedTab = MainAppTab.PROFILES },
           onStartStateTimer = onStartStateTimer,
           onExtendTimer = onExtendTimer,
@@ -1228,6 +1274,7 @@ internal fun MainDashboardContent(
           onActivateProfile = { profile ->
             onActivateProfile(profile)
             if (state.accessControlConfig.hasPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) {
+              onLatchStreamOrder()
               selectedTab = MainAppTab.NOW
             }
           },
@@ -1392,6 +1439,8 @@ private fun NowTabContent(
   onSelectAudioMode: (BaseAudioMode) -> Unit,
   onToggleVibrate: () -> Unit,
   onStreamVolumeChange: (VolumeStreamType, Int) -> Unit,
+  onToggleRingNotificationLink: () -> Unit,
+  onSetSecondaryDrawerExpanded: (Boolean) -> Unit,
   onOpenProfilesTab: () -> Unit,
   onStartStateTimer: (SoundState, Int) -> Unit,
   onExtendTimer: (Int) -> Unit,
@@ -1471,12 +1520,19 @@ private fun NowTabContent(
       )
     }
 
-    // Bloco 2: 4 Cápsulas Líquidas de Volume ZENITH
+    // Bloco 2: 7 Canais de Volume ZENITH (Barras Fixas 1..7 + Gaveta Expansível Inteligente)
     item {
       VolumeStreamsCard(
         streams = state.streams,
+        streamMinPercents = state.streamMinPercents,
+        orderedStreams = state.orderedStreams,
+        visibleFixedStreamsCount = state.visibleFixedStreamsCount,
+        ringNotificationLinked = state.ringNotificationLinked,
+        secondaryDrawerExpanded = state.secondaryDrawerExpanded,
         audioMode = state.audioMode,
         onStreamVolumeChange = onStreamVolumeChange,
+        onToggleRingNotificationLink = onToggleRingNotificationLink,
+        onToggleSecondaryDrawer = onSetSecondaryDrawerExpanded,
       )
     }
   }
@@ -2084,13 +2140,72 @@ private fun WriteSettingsPermissionBanner(
 @Composable
 private fun VolumeStreamsCard(
   streams: VolumeStreams,
+  streamMinPercents: Map<VolumeStreamType, Int>,
+  orderedStreams: List<VolumeStreamType>,
+  visibleFixedStreamsCount: Int,
+  ringNotificationLinked: Boolean,
+  secondaryDrawerExpanded: Boolean,
   audioMode: BaseAudioMode,
   onStreamVolumeChange: (VolumeStreamType, Int) -> Unit,
+  onToggleRingNotificationLink: () -> Unit,
+  onToggleSecondaryDrawer: (Boolean) -> Unit,
 ) {
+  val haptics = LocalHapticFeedback.current
   val activeAccent = audioMode.tonalAccentColor()
+  val normalizedOrder = VolumeStreamType.normalizeManualStreamOrder(orderedStreams)
+  val clampedFixedCount = visibleFixedStreamsCount.coerceIn(1, normalizedOrder.size)
+  val fixedStreams = normalizedOrder.take(clampedFixedCount)
+  val drawerStreams = normalizedOrder.drop(clampedFixedCount)
+
+  var linkedDragPreviewPercent by remember { mutableStateOf<Int?>(null) }
+  LaunchedEffect(ringNotificationLinked) {
+    if (!ringNotificationLinked) {
+      linkedDragPreviewPercent = null
+    }
+  }
+
+  @Composable
+  fun RenderStreamCapsule(streamType: VolumeStreamType) {
+    val isRingOrNotif =
+      streamType == VolumeStreamType.RING || streamType == VolumeStreamType.NOTIFICATION
+    PillVolumeSliderRow(
+      type = streamType,
+      icon = streamType.streamIcon(),
+      percent = streams.percentFor(streamType),
+      minPercent = (streamMinPercents[streamType] ?: 0).coerceIn(0, 100),
+      accentColor = activeAccent,
+      isLinked = if (isRingOrNotif) ringNotificationLinked else null,
+      onToggleLink = if (isRingOrNotif) {
+        {
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          linkedDragPreviewPercent = null
+          onToggleRingNotificationLink()
+        }
+      } else {
+        null
+      },
+      externalPreviewPercent = if (isRingOrNotif && ringNotificationLinked) {
+        linkedDragPreviewPercent
+      } else {
+        null
+      },
+      onLivePreviewChange = if (isRingOrNotif) {
+        { preview ->
+          linkedDragPreviewPercent = if (ringNotificationLinked) preview else null
+        }
+      } else {
+        null
+      },
+      onValueChangeFinished = { nextPercent ->
+        onStreamVolumeChange(streamType, nextPercent)
+      },
+    )
+  }
 
   Card(
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag(AppTestTags.Now.VOLUME_STREAMS_CARD),
     shape = RoundedCornerShape(28.dp),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     colors = CardDefaults.cardColors(
@@ -2118,7 +2233,10 @@ private fun VolumeStreamsCard(
           color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
           Text(
-            text = AppLabels.Now.fourChannelsBadge,
+            text = AppLabels.Now.channelsBadge(
+              fixedCount = clampedFixedCount,
+              totalCount = normalizedOrder.size,
+            ),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2127,34 +2245,75 @@ private fun VolumeStreamsCard(
         }
       }
 
-      PillVolumeSliderRow(
-        type = VolumeStreamType.RING,
-        icon = Icons.Default.RingVolume,
-        percent = streams.ringPercent,
-        accentColor = activeAccent,
-        onValueChangeFinished = { onStreamVolumeChange(VolumeStreamType.RING, it) },
-      )
-      PillVolumeSliderRow(
-        type = VolumeStreamType.NOTIFICATION,
-        icon = Icons.Default.Notifications,
-        percent = streams.notificationPercent,
-        accentColor = activeAccent,
-        onValueChangeFinished = { onStreamVolumeChange(VolumeStreamType.NOTIFICATION, it) },
-      )
-      PillVolumeSliderRow(
-        type = VolumeStreamType.MEDIA,
-        icon = Icons.Default.MusicNote,
-        percent = streams.mediaPercent,
-        accentColor = activeAccent,
-        onValueChangeFinished = { onStreamVolumeChange(VolumeStreamType.MEDIA, it) },
-      )
-      PillVolumeSliderRow(
-        type = VolumeStreamType.ALARM,
-        icon = Icons.Default.Alarm,
-        percent = streams.alarmPercent,
-        accentColor = activeAccent,
-        onValueChangeFinished = { onStreamVolumeChange(VolumeStreamType.ALARM, it) },
-      )
+      fixedStreams.forEach { streamType ->
+        key(streamType) {
+          RenderStreamCapsule(streamType)
+        }
+      }
+
+      if (drawerStreams.isNotEmpty()) {
+        Surface(
+          shape = RoundedCornerShape(18.dp),
+          color = MaterialTheme.colorScheme.surfaceContainer,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable {
+              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+              onToggleSecondaryDrawer(!secondaryDrawerExpanded)
+            }
+            .testTag(AppTestTags.Now.SECONDARY_DRAWER_TOGGLE),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 14.dp, vertical = 11.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = if (secondaryDrawerExpanded) {
+                AppLabels.Now.secondaryDrawerExpandedLabel
+              } else {
+                AppLabels.Now.secondaryDrawerCollapsedLabel(drawerStreams)
+              },
+              style = MaterialTheme.typography.labelLarge,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
+            )
+            Icon(
+              imageVector = if (secondaryDrawerExpanded) {
+                Icons.Default.ExpandLess
+              } else {
+                Icons.Default.ExpandMore
+              },
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+
+        AnimatedVisibility(
+          visible = secondaryDrawerExpanded,
+          enter = expandVertically() + fadeIn(),
+          exit = shrinkVertically() + fadeOut(),
+        ) {
+          Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            drawerStreams.forEach { streamType ->
+              key(streamType) {
+                RenderStreamCapsule(streamType)
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

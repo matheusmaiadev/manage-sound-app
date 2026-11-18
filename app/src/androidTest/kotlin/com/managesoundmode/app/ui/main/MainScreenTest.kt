@@ -23,6 +23,7 @@ import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.SoundState
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
@@ -156,6 +157,7 @@ class MainScreenTest {
     composeTestRule.setContent {
       var activeTimer by mutableStateOf<TimedModeSession?>(null)
       var currentMode by mutableStateOf(SoundMode.VIBRATE)
+      var drawerExpanded by mutableStateOf(false)
 
       ManageSoundModeTheme {
         MainDashboardContent(
@@ -167,12 +169,14 @@ class MainScreenTest {
             activeTimer = activeTimer,
             profiles = SoundProfile.defaultPresets,
             activeProfileId = "preset_work_high",
+            secondaryDrawerExpanded = drawerExpanded,
           ),
           onSelectMode = {
             selectedMode = it
             currentMode = it
           },
           onStreamVolumeChange = { _, _ -> },
+          onSetSecondaryDrawerExpanded = { drawerExpanded = it },
           onActivateProfile = {},
           onStartTimer = { mode, mins ->
             startedTimerPair = mode to mins
@@ -223,7 +227,22 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag(AppTestTags.Now.CANCEL_TIMER_BUTTON).performClick()
     assertTrue(timerCancelled)
 
-    // UC-10: Verificar presença dos 4 Sliders de Volume
+    // UC-10: Verificar presença dos 4 Sliders fixos iniciais + expansão da gaveta dos 3 canais secundários
+    VolumeStreamType.primaryDefaultStreams.forEach { streamType ->
+      composeTestRule
+        .onNodeWithTag(AppTestTags.Now.streamSlider(streamType))
+        .performScrollTo()
+        .assertIsDisplayed()
+    }
+    VolumeStreamType.secondaryDefaultStreams.forEach { secondaryType ->
+      composeTestRule
+        .onNodeWithTag(AppTestTags.Now.streamSlider(secondaryType))
+        .assertDoesNotExist()
+    }
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.SECONDARY_DRAWER_TOGGLE)
+      .performScrollTo()
+      .performClick()
     VolumeStreamType.entries.forEach { streamType ->
       composeTestRule
         .onNodeWithTag(AppTestTags.Now.streamSlider(streamType))
@@ -232,6 +251,9 @@ class MainScreenTest {
     }
 
     // UC-09: Clicar no Chip do Perfil Ativo navega para a aba Perfis
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Now.HERO_MODE_CARD))
     composeTestRule
       .onNodeWithTag(AppTestTags.Now.ACTIVE_PROFILE_CHIP)
       .performScrollTo()
@@ -1003,5 +1025,168 @@ class MainScreenTest {
     composeTestRule
       .onNodeWithText(AppLabels.Settings.testSmartNotificationSentMessage)
       .assertIsDisplayed()
+  }
+
+  /**
+   * UC-38 (SPEC-007): 7 Canais de Volume com Micro-Descrições, Botão Inline Link/LinkOff,
+   * Gaveta Expansível, Seletor 1..7 Barras Fixas, Ordem Manual (Setas) e Canais Secundários Opcionais em Perfis.
+   */
+  @Test
+  fun uc38_spec007_sevenStreamsInlineLinkSmartDrawerFixedBars1To7ManualOrderAndProfileSecondaryOverrides() {
+    var linked by mutableStateOf(true)
+    var fixedCount by mutableStateOf(4)
+    var sortMode by mutableStateOf(StreamSortMode.MOST_USED)
+    var manualOrder by mutableStateOf(VolumeStreamType.defaultOrder)
+    var drawerExpanded by mutableStateOf(false)
+    var savedProfile: SoundProfile? = null
+
+    composeTestRule.setContent {
+      ManageSoundModeTheme {
+        MainDashboardContent(
+          state = MainScreenUiState.Ready(
+            currentMode = SoundMode.NORMAL,
+            streams = VolumeStreams(
+              ringPercent = 80,
+              notificationPercent = 80,
+              mediaPercent = 50,
+              alarmPercent = 90,
+              systemPercent = 45,
+              voiceCallPercent = 85,
+              accessibilityPercent = 70,
+            ),
+            streamMinPercents = mapOf(
+              VolumeStreamType.ALARM to 14,
+              VolumeStreamType.VOICE_CALL to 17,
+            ),
+            hasDndPermission = true,
+            profiles = SoundProfile.defaultPresets,
+            ringNotificationLinked = linked,
+            visibleFixedStreamsCount = fixedCount,
+            streamSortMode = sortMode,
+            manualStreamOrder = manualOrder,
+            secondaryDrawerExpanded = drawerExpanded,
+          ),
+          onSelectMode = {},
+          onStreamVolumeChange = { _, _ -> },
+          onToggleRingNotificationLink = { linked = !linked },
+          onSetRingNotificationLinked = { linked = it },
+          onSetVisibleFixedStreamsCount = { fixedCount = it },
+          onSetStreamSortMode = { sortMode = it },
+          onMoveStreamInManualOrder = { type, moveUp ->
+            val current = manualOrder.toMutableList()
+            val idx = current.indexOf(type)
+            val target = if (moveUp) idx - 1 else idx + 1
+            if (idx >= 0 && target in current.indices) {
+              val tmp = current[target]
+              current[target] = type
+              current[idx] = tmp
+              manualOrder = current
+            }
+          },
+          onSetSecondaryDrawerExpanded = { drawerExpanded = it },
+          onUpsertProfile = { profile, _ -> savedProfile = profile },
+          onActivateProfile = {},
+          onStartTimer = { _, _ -> },
+          onCancelTimer = {},
+          onSaveProfile = { _, _ -> },
+          onDismissMessage = {},
+          onRequestDndPermission = {},
+        )
+      }
+    }
+
+    // 1. Micro-descrições visíveis e botão inline Link apenas em RING e NOTIFICATION
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamCapsule(VolumeStreamType.MEDIA))
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithText("Músicas, vídeos e jogos").assertIsDisplayed()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamLinkButton(VolumeStreamType.MEDIA))
+      .assertDoesNotExist()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamLinkButton(VolumeStreamType.RING))
+      .performScrollTo()
+      .assertIsDisplayed()
+      .performClick()
+    assertEquals(false, linked)
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamLinkButton(VolumeStreamType.NOTIFICATION))
+      .performScrollTo()
+      .assertIsDisplayed()
+      .performClick()
+    assertEquals(true, linked)
+
+    // 2. Gaveta secundária recolhida de fábrica -> expandir exibe Sistema, Chamada e Acessibilidade
+    composeTestRule
+      .onNodeWithText("Outros volumes (Sistema, Chamada, Acessibilidade)")
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SECONDARY_DRAWER_TOGGLE).performClick()
+    assertTrue(drawerExpanded)
+    composeTestRule.onNodeWithText("Ocultar volumes secundários").performScrollTo().assertIsDisplayed()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamCapsule(VolumeStreamType.VOICE_CALL))
+      .performScrollTo()
+      .assertIsDisplayed()
+
+    // 3. Ajustes › Áudio e Timer: 2 barras fixas vs 7 barras fixas + Ordem Manual (Setas)
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_SETTINGS).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_AUDIO_MEDIA).performClick()
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.RING_NOTIFICATION_LINK_SWITCH)
+      .performScrollTo()
+      .performClick()
+    assertEquals(false, linked)
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.fixedStreamsCountChip(7))
+      .performScrollTo()
+      .performClick()
+    assertEquals(7, fixedCount)
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.streamSortModeButton(StreamSortMode.MANUAL))
+      .performScrollTo()
+      .performClick()
+    assertEquals(StreamSortMode.MANUAL, sortMode)
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.manualOrderMoveDownButton(VolumeStreamType.MEDIA))
+      .performScrollTo()
+      .performClick()
+    assertEquals(VolumeStreamType.RING, manualOrder[0])
+    assertEquals(VolumeStreamType.MEDIA, manualOrder[1])
+
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SETTINGS_BUTTON).performClick()
+
+    // Com 7 barras fixas, o botão da gaveta desaparece automaticamente e Acessibilidade fica fixa
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SECONDARY_DRAWER_TOGGLE).assertDoesNotExist()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.ACCESSIBILITY))
+      .performScrollTo()
+      .assertIsDisplayed()
+
+    // 4. ProfileEditorBottomSheet: canais secundários opcionais desativados por padrão; habilitar Sistema salva overrideSystemPercent
+    composeTestRule.onNodeWithTag(AppTestTags.Tabs.PROFILES).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Fab.SAVE_PROFILE_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.NAME_INPUT).performTextInput("Perfil Sistema")
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Profiles.EDITOR_SECONDARY_DRAWER_TOGGLE)
+      .performScrollTo()
+      .performClick()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Profiles.editorSecondaryOverrideSwitch(VolumeStreamType.SYSTEM))
+      .performScrollTo()
+      .performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.CONFIRM_SAVE_BUTTON).performClick()
+
+    assertNotNull(savedProfile)
+    assertNotNull(savedProfile?.overrideSystemPercent)
+    assertEquals(null, savedProfile?.overrideVoiceCallPercent)
+    assertEquals(null, savedProfile?.overrideAccessibilityPercent)
   }
 }

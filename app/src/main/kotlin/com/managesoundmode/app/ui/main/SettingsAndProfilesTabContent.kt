@@ -32,6 +32,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BluetoothAudio
@@ -42,6 +44,8 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicOff
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -55,6 +59,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SettingsBrightness
 import androidx.compose.material.icons.filled.Style
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.Widgets
@@ -106,15 +111,18 @@ import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
+import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.tile.QuickTileKind
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
 import com.managesoundmode.app.ui.common.AppTestTags
 import com.managesoundmode.app.ui.components.M3CheckSwitch
 import com.managesoundmode.app.ui.components.groupedCardShape
+import com.managesoundmode.app.ui.components.streamIcon
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -178,6 +186,10 @@ internal fun SettingsAndProfilesTabContent(
   onUnlockAdminWithPin: (String, () -> Unit) -> Unit = { _, onSuccess -> onSuccess() },
   onSetSystemZenRulesEnabled: (Boolean) -> Unit = {},
   onSyncSystemZenRulesNow: () -> Unit = {},
+  onSetRingNotificationLinked: (Boolean) -> Unit = {},
+  onSetVisibleFixedStreamsCount: (Int) -> Unit = {},
+  onSetStreamSortMode: (StreamSortMode) -> Unit = {},
+  onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
   modifier: Modifier = Modifier,
 ) {
   var openCategory by rememberSaveable { mutableStateOf<SettingsCategory?>(null) }
@@ -278,6 +290,10 @@ internal fun SettingsAndProfilesTabContent(
       onSetAccessPin = onSetAccessPin,
       onSetSystemZenRulesEnabled = onSetSystemZenRulesEnabled,
       onSyncSystemZenRulesNow = onSyncSystemZenRulesNow,
+      onSetRingNotificationLinked = onSetRingNotificationLinked,
+      onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
+      onSetStreamSortMode = onSetStreamSortMode,
+      onMoveStreamInManualOrder = onMoveStreamInManualOrder,
     )
   }
 
@@ -715,6 +731,10 @@ internal fun SettingsCategoryFullScreenDialog(
   onSetAccessPin: (String?) -> Unit = {},
   onSetSystemZenRulesEnabled: (Boolean) -> Unit = {},
   onSyncSystemZenRulesNow: () -> Unit = {},
+  onSetRingNotificationLinked: (Boolean) -> Unit = {},
+  onSetVisibleFixedStreamsCount: (Int) -> Unit = {},
+  onSetStreamSortMode: (StreamSortMode) -> Unit = {},
+  onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
 ) {
   val context = LocalContext.current
   val subScreenSnackbarHostState = remember { SnackbarHostState() }
@@ -828,6 +848,10 @@ internal fun SettingsCategoryFullScreenDialog(
             onSetMuteMediaOnSilent = onSetMuteMediaOnSilent,
             onSetPreserveMediaOnBluetooth = onSetPreserveMediaOnBluetooth,
             onSetDefaultTimerMinutes = onSetDefaultTimerMinutes,
+            onSetRingNotificationLinked = onSetRingNotificationLinked,
+            onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
+            onSetStreamSortMode = onSetStreamSortMode,
+            onMoveStreamInManualOrder = onMoveStreamInManualOrder,
             onRequestNotificationPermission = onRequestNotificationPermission,
             modifier = Modifier.padding(innerPadding),
           )
@@ -1614,7 +1638,7 @@ private fun AutomationSettingsSubScreen(
   }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun AudioAndTimerSettingsSubScreen(
   state: MainScreenUiState.Ready,
@@ -1623,10 +1647,16 @@ private fun AudioAndTimerSettingsSubScreen(
   onSetMuteMediaOnSilent: (Boolean) -> Unit,
   onSetPreserveMediaOnBluetooth: (Boolean) -> Unit,
   onSetDefaultTimerMinutes: (Int) -> Unit,
+  onSetRingNotificationLinked: (Boolean) -> Unit = {},
+  onSetVisibleFixedStreamsCount: (Int) -> Unit = {},
+  onSetStreamSortMode: (StreamSortMode) -> Unit = {},
+  onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
   onRequestNotificationPermission: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val timerOptions = listOf(15, 30, 60, 120)
+  val fixedBarCountOptions = (1..VolumeStreamType.entries.size).toList()
+  val normalizedManualOrder = VolumeStreamType.normalizeManualStreamOrder(state.manualStreamOrder)
 
   Column(
     modifier = modifier
@@ -1842,6 +1872,262 @@ private fun AudioAndTimerSettingsSubScreen(
               label = { Text(labelText) },
               modifier = Modifier.testTag(AppTestTags.Settings.defaultTimerChip(minutes)),
             )
+          }
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(14.dp))
+    SectionHeader(title = AppLabels.Settings.volumeChannelsSectionTitle)
+
+    // 5. Vincular Toque e Notificações
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = groupedCardShape(index = 0, totalCount = 3),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = if (state.ringNotificationLinked) {
+              Icons.Default.Link
+            } else {
+              Icons.Default.LinkOff
+            },
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column {
+            Text(
+              text = AppLabels.Settings.ringNotificationLinkTitle,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = AppLabels.Settings.ringNotificationLinkSubtitle,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+        M3CheckSwitch(
+          checked = state.ringNotificationLinked,
+          onCheckedChange = onSetRingNotificationLinked,
+          modifier = Modifier.testTag(AppTestTags.Settings.RING_NOTIFICATION_LINK_SWITCH),
+        )
+      }
+    }
+
+    // 6. Quantidade de Barras Fixas (1..7)
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = groupedCardShape(index = 1, totalCount = 3),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Tune,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = AppLabels.Settings.visibleFixedStreamsTitle,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = AppLabels.Settings.visibleFixedStreamsSubtitle,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          fixedBarCountOptions.forEach { count ->
+            val selected = state.visibleFixedStreamsCount == count
+            FilterChip(
+              selected = selected,
+              onClick = { onSetVisibleFixedStreamsCount(count) },
+              label = { Text(count.toString()) },
+              modifier = Modifier.testTag(AppTestTags.Settings.fixedStreamsCountChip(count)),
+            )
+          }
+        }
+      }
+    }
+
+    // 7. Modo de Ordenação (Mais usados vs Ordem manual com setas)
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = groupedCardShape(index = 2, totalCount = 3),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = AppLabels.Settings.streamSortModeTitle,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = if (state.streamSortMode == StreamSortMode.MOST_USED) {
+                AppLabels.Settings.streamSortModeMostUsedSubtitle
+              } else {
+                AppLabels.Settings.streamSortModeManualSubtitle
+              },
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+          StreamSortMode.entries.forEachIndexed { idx, mode ->
+            SegmentedButton(
+              selected = state.streamSortMode == mode,
+              onClick = { onSetStreamSortMode(mode) },
+              shape = SegmentedButtonDefaults.itemShape(
+                index = idx,
+                count = StreamSortMode.entries.size,
+              ),
+              modifier = Modifier.testTag(AppTestTags.Settings.streamSortModeButton(mode)),
+            ) {
+              Text(mode.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+          }
+        }
+
+        if (state.streamSortMode == StreamSortMode.MANUAL) {
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            normalizedManualOrder.forEachIndexed { idx, streamType ->
+              val isPinned = idx < state.visibleFixedStreamsCount
+              Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Row(
+                    modifier = Modifier
+                      .weight(1f)
+                      .padding(end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  ) {
+                    Box(
+                      modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                      contentAlignment = Alignment.Center,
+                    ) {
+                      Icon(
+                        imageVector = streamType.streamIcon(),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(15.dp),
+                      )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                      Text(
+                        text = "${idx + 1}. ${streamType.label}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                      Text(
+                        text = if (isPinned) {
+                          "${AppLabels.Settings.pinnedStreamTag} • ${streamType.microDescription}"
+                        } else {
+                          "${AppLabels.Settings.drawerStreamTag} • ${streamType.microDescription}"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                    }
+                  }
+
+                  Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    IconButton(
+                      onClick = { onMoveStreamInManualOrder(streamType, true) },
+                      enabled = idx > 0,
+                      modifier = Modifier
+                        .size(34.dp)
+                        .testTag(AppTestTags.Settings.manualOrderMoveUpButton(streamType)),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.ArrowUpward,
+                        contentDescription = AppLabels.Settings.moveStreamUpContentDesc(streamType.label),
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
+                    IconButton(
+                      onClick = { onMoveStreamInManualOrder(streamType, false) },
+                      enabled = idx < normalizedManualOrder.lastIndex,
+                      modifier = Modifier
+                        .size(34.dp)
+                        .testTag(AppTestTags.Settings.manualOrderMoveDownButton(streamType)),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.ArrowDownward,
+                        contentDescription = AppLabels.Settings.moveStreamDownContentDesc(streamType.label),
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

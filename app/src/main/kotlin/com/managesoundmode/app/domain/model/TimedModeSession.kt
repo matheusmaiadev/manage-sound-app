@@ -63,10 +63,14 @@ data class DeviceSoundSnapshot(
   val activeRuleSubtitle: String? = null,
   val activeRuleSessionKey: String? = null,
   val isManuallyOverridden: Boolean = false,
+  val streamMinPercents: Map<VolumeStreamType, Int> = emptyMap(),
 ) {
   val audioMode: BaseAudioMode
     get() = currentSoundState.audioMode
 
   val vibrateEnabled: Boolean
     get() = currentSoundState.vibrateEnabled
+
+  fun minPercentFor(type: VolumeStreamType): Int =
+    (streamMinPercents[type] ?: 0).coerceIn(0, 100)
 }

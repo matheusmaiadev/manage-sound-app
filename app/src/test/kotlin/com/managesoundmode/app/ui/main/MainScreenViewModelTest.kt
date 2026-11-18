@@ -17,6 +17,7 @@ import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.SoundState
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
@@ -422,7 +423,16 @@ class MainScreenViewModelTest {
       assertEquals("Som (Sem Vibrar)", SoundState(BaseAudioMode.SOUND, false).title)
       assertEquals("Silêncio + Vibrar", SoundState(BaseAudioMode.SILENT, true).title)
       assertEquals("Silêncio Total", SoundState(BaseAudioMode.SILENT, false).title)
-      assertEquals("Toque (Ring)", VolumeStreamType.RING.label)
+      assertEquals("Toque", VolumeStreamType.RING.label)
+      assertEquals("Ligações recebidas", VolumeStreamType.RING.microDescription)
+      assertEquals("Sistema", VolumeStreamType.SYSTEM.label)
+      assertEquals("Chamada", VolumeStreamType.VOICE_CALL.label)
+      assertEquals("Acessibilidade", VolumeStreamType.ACCESSIBILITY.label)
+      assertEquals("Mais usados", StreamSortMode.MOST_USED.label)
+      assertEquals(
+        "Outros volumes (Sistema, Chamada, Acessibilidade)",
+        AppLabels.Now.secondaryDrawerCollapsedLabel(VolumeStreamType.secondaryDefaultStreams),
+      )
 
       AppLabels.currentLanguage = AppLanguage.EN
       assertEquals("Sound Modes", AppLabels.Tabs.nowTopBarTitle)
@@ -433,6 +443,11 @@ class MainScreenViewModelTest {
       assertEquals("Silent + Vibrate", SoundState(BaseAudioMode.SILENT, true).title)
       assertEquals("Total Silence", SoundState(BaseAudioMode.SILENT, false).title)
       assertEquals("Ring", VolumeStreamType.RING.label)
+      assertEquals("Incoming calls", VolumeStreamType.RING.microDescription)
+      assertEquals("System", VolumeStreamType.SYSTEM.label)
+      assertEquals("Call", VolumeStreamType.VOICE_CALL.label)
+      assertEquals("Accessibility", VolumeStreamType.ACCESSIBILITY.label)
+      assertEquals("Most used", StreamSortMode.MOST_USED.label)
       assertEquals("Locations", AppLabels.Tabs.locationsLabel)
 
       assertEquals("tab_now", AppTestTags.Tabs.NOW)
@@ -1190,6 +1205,212 @@ class MainScreenViewModelTest {
       AppLabels.currentLanguage = AppLanguage.PT_BR
     }
   }
+
+  @Test
+  fun spec007_ac01_ac02_sevenStreamsMinVolumeFloorAndRingNotificationInlineLinkSync() = runTest {
+    fakePreferences.clearSchedules()
+    fakeSystemController.streamMinPercents = mapOf(
+      VolumeStreamType.ALARM to 14,
+      VolumeStreamType.VOICE_CALL to 17,
+    )
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+    viewModel.onRefreshSystemState()
+
+    // 1. AC-01: All 7 streams apply cleanly and respect getStreamMinVolume floor
+    val initial = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(14, initial.minPercentFor(VolumeStreamType.ALARM))
+    assertEquals(17, initial.minPercentFor(VolumeStreamType.VOICE_CALL))
+    assertEquals(0, initial.minPercentFor(VolumeStreamType.MEDIA))
+
+    viewModel.onStreamVolumeChange(VolumeStreamType.ALARM, 0)
+    viewModel.onStreamVolumeChange(VolumeStreamType.VOICE_CALL, 0)
+    viewModel.onStreamVolumeChange(VolumeStreamType.SYSTEM, 35)
+    viewModel.onStreamVolumeChange(VolumeStreamType.ACCESSIBILITY, 55)
+
+    val afterFloorCheck = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(14, afterFloorCheck.streams.alarmPercent)
+    assertEquals(17, afterFloorCheck.streams.voiceCallPercent)
+    assertEquals(35, afterFloorCheck.streams.systemPercent)
+    assertEquals(55, afterFloorCheck.streams.accessibilityPercent)
+
+    // 2. AC-02: Factory default ringNotificationLinked = true syncs RING <-> NOTIFICATION bidirectionally
+    assertTrue(afterFloorCheck.ringNotificationLinked)
+    viewModel.onStreamVolumeChange(VolumeStreamType.RING, 62)
+    val afterLinkedRing = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(62, afterLinkedRing.streams.ringPercent)
+    assertEquals(62, afterLinkedRing.streams.notificationPercent)
+
+    viewModel.onStreamVolumeChange(VolumeStreamType.NOTIFICATION, 38)
+    val afterLinkedNotif = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(38, afterLinkedNotif.streams.ringPercent)
+    assertEquals(38, afterLinkedNotif.streams.notificationPercent)
+
+    // 3. Inline toggle unlinks RING and NOTIFICATION -> independent adjustments
+    viewModel.onToggleRingNotificationLink()
+    val unlinked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(false, unlinked.ringNotificationLinked)
+
+    viewModel.onStreamVolumeChange(VolumeStreamType.RING, 85)
+    viewModel.onStreamVolumeChange(VolumeStreamType.NOTIFICATION, 25)
+    val afterIndependent = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(85, afterIndependent.streams.ringPercent)
+    assertEquals(25, afterIndependent.streams.notificationPercent)
+
+    // 4. Re-linking aligns NOTIFICATION to RING immediately in SOUND mode
+    viewModel.onToggleRingNotificationLink()
+    val relinked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertTrue(relinked.ringNotificationLinked)
+    assertEquals(85, relinked.streams.ringPercent)
+    assertEquals(85, relinked.streams.notificationPercent)
+  }
+
+  @Test
+  fun spec007_ac03_ac04_antiJumpMostUsedOrderingVisibleFixedBars1To7AndManualOrder() = runTest {
+    fakePreferences.clearSchedules()
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    // 1. AC-03: Default 4 fixed bars (MEDIA, RING, NOTIFICATION, ALARM) and 3 hidden in drawer
+    val initial = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(4, initial.visibleFixedStreamsCount)
+    assertEquals(false, initial.secondaryDrawerExpanded)
+    assertEquals(
+      listOf(
+        VolumeStreamType.MEDIA,
+        VolumeStreamType.RING,
+        VolumeStreamType.NOTIFICATION,
+        VolumeStreamType.ALARM,
+      ),
+      initial.fixedVisibleStreams,
+    )
+    assertEquals(
+      listOf(
+        VolumeStreamType.SYSTEM,
+        VolumeStreamType.VOICE_CALL,
+        VolumeStreamType.ACCESSIBILITY,
+      ),
+      initial.drawerHiddenStreams,
+    )
+
+    // 2. AC-04: Adjusting VOICE_CALL 3x and SYSTEM 2x increments usage silently WITHOUT jumping mid-session
+    repeat(3) { step ->
+      viewModel.onStreamVolumeChange(VolumeStreamType.VOICE_CALL, 60 + step)
+    }
+    repeat(2) { step ->
+      viewModel.onStreamVolumeChange(VolumeStreamType.SYSTEM, 40 + step)
+    }
+
+    val duringSession = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(3, duringSession.streamUsageCounts[VolumeStreamType.VOICE_CALL])
+    assertEquals(2, duringSession.streamUsageCounts[VolumeStreamType.SYSTEM])
+    assertEquals(VolumeStreamType.defaultOrder, duringSession.orderedStreams)
+
+    // 3. On next screen resume/entry, latched order refreshes and promotes VOICE_CALL & SYSTEM
+    viewModel.onRefreshSystemState()
+    val afterResume = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(VolumeStreamType.VOICE_CALL, afterResume.fixedVisibleStreams[0])
+    assertEquals(VolumeStreamType.SYSTEM, afterResume.fixedVisibleStreams[1])
+
+    // 4. Configurable 1..7 fixed bars (2 -> 2 fixed + 5 drawer; 7 -> 7 fixed + 0 drawer)
+    viewModel.onSetVisibleFixedStreamsCount(2)
+    val twoFixed = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(2, twoFixed.fixedVisibleStreams.size)
+    assertEquals(5, twoFixed.drawerHiddenStreams.size)
+
+    viewModel.onSetVisibleFixedStreamsCount(7)
+    val sevenFixed = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(7, sevenFixed.fixedVisibleStreams.size)
+    assertTrue(sevenFixed.drawerHiddenStreams.isEmpty())
+
+    // 5. Manual order mode + move up/down
+    viewModel.onSetStreamSortMode(StreamSortMode.MANUAL)
+    viewModel.onMoveStreamInManualOrder(VolumeStreamType.RING, moveUp = true)
+    val manualMoved = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(StreamSortMode.MANUAL, manualMoved.streamSortMode)
+    assertEquals(VolumeStreamType.RING, manualMoved.orderedStreams[0])
+    assertEquals(VolumeStreamType.MEDIA, manualMoved.orderedStreams[1])
+
+    viewModel.onSetSecondaryDrawerExpanded(true)
+    assertTrue((viewModel.uiState.value as MainScreenUiState.Ready).secondaryDrawerExpanded)
+  }
+
+  @Test
+  fun spec007_ac05_profileOptionalSecondaryOverridesAndLegacyV1BackupCompatibility() = runTest {
+    fakePreferences.clearSchedules()
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    // 1. Set baseline secondary stream volumes on the device
+    viewModel.onStreamVolumeChange(VolumeStreamType.SYSTEM, 44)
+    viewModel.onStreamVolumeChange(VolumeStreamType.VOICE_CALL, 77)
+    viewModel.onStreamVolumeChange(VolumeStreamType.ACCESSIBILITY, 66)
+
+    // 2. Activating a preset profile (null secondary overrides) preserves SYSTEM, VOICE_CALL, ACCESSIBILITY
+    val workPreset = (viewModel.uiState.value as MainScreenUiState.Ready)
+      .profiles.first { it.id == "preset_work_high" }
+    viewModel.onActivateProfile(workPreset)
+    val afterPreset = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(44, afterPreset.streams.systemPercent)
+    assertEquals(77, afterPreset.streams.voiceCallPercent)
+    assertEquals(66, afterPreset.streams.accessibilityPercent)
+
+    // 3. Upsert and activate a profile that explicitly overrides SYSTEM (20%) & VOICE_CALL (92%), leaving ACCESSIBILITY null
+    val customSecondaryProfile = SoundProfile(
+      id = "custom_call_focus",
+      name = "Ligação Clara",
+      description = "Voz alta e sistema discreto",
+      audioMode = BaseAudioMode.SOUND,
+      vibrateEnabled = true,
+      streams = VolumeStreams(
+        ringPercent = 90,
+        notificationPercent = 60,
+        mediaPercent = 30,
+        alarmPercent = 85,
+        systemPercent = 20,
+        voiceCallPercent = 92,
+        accessibilityPercent = 10,
+      ),
+      isPreset = false,
+      overrideSystemPercent = 20,
+      overrideVoiceCallPercent = 92,
+      overrideAccessibilityPercent = null,
+    )
+    viewModel.onUpsertProfile(customSecondaryProfile, applyImmediately = true)
+    val afterCustom = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(20, afterCustom.streams.systemPercent)
+    assertEquals(92, afterCustom.streams.voiceCallPercent)
+    assertEquals(66, afterCustom.streams.accessibilityPercent)
+
+    // 4. Backup/Restore round-trip of SPEC-007 settings + legacy v1 compatibility
+    viewModel.onSetRingNotificationLinked(false)
+    viewModel.onSetVisibleFixedStreamsCount(5)
+    viewModel.onSetStreamSortMode(StreamSortMode.MANUAL)
+    var exportedSpec007Json = ""
+    viewModel.onExportBackupJson { exportedSpec007Json = it }
+
+    val legacyV1WithoutSpec007Fields = """
+      {"version":1,"customProfiles":[{"id":"legacy_p","name":"Perfil V1","description":"v1","mode":"NORMAL","streams":{"ringPercent":80,"notificationPercent":70,"mediaPercent":50,"alarmPercent":90},"isPreset":false}]}
+    """.trimIndent()
+    viewModel.onImportBackupJson(legacyV1WithoutSpec007Fields)
+    val afterLegacyImport = viewModel.uiState.value as MainScreenUiState.Ready
+    assertTrue(afterLegacyImport.ringNotificationLinked)
+    assertEquals(4, afterLegacyImport.visibleFixedStreamsCount)
+    assertEquals(StreamSortMode.MOST_USED, afterLegacyImport.streamSortMode)
+    val decodedLegacy = afterLegacyImport.profiles.first { it.id == "legacy_p" }
+    assertNull(decodedLegacy.overrideSystemPercent)
+    assertNull(decodedLegacy.overrideVoiceCallPercent)
+    assertNull(decodedLegacy.overrideAccessibilityPercent)
+
+    viewModel.onImportBackupJson(exportedSpec007Json)
+    val afterSpec007Restore = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(false, afterSpec007Restore.ringNotificationLinked)
+    assertEquals(5, afterSpec007Restore.visibleFixedStreamsCount)
+    assertEquals(StreamSortMode.MANUAL, afterSpec007Restore.streamSortMode)
+  }
 }
 
 private class FakeSoundSystemController : SoundSystemController {
@@ -1201,6 +1422,7 @@ private class FakeSoundSystemController : SoundSystemController {
       soundState = SoundState.fromLegacyMode(value)
     }
   var streams: VolumeStreams = VolumeStreams()
+  var streamMinPercents: Map<VolumeStreamType, Int> = emptyMap()
   var dndGranted: Boolean = true
   var canWriteSettings: Boolean = true
   var vibrateWhenRingingSetting: Boolean = true
@@ -1219,6 +1441,9 @@ private class FakeSoundSystemController : SoundSystemController {
   override fun readSoundState(): SoundState = soundState
 
   override fun readVolumeStreams(): VolumeStreams = streams
+
+  override fun readStreamMinPercent(type: VolumeStreamType): Int =
+    (streamMinPercents[type] ?: 0).coerceIn(0, 100)
 
   override fun hasDndPermission(): Boolean = dndGranted
 
@@ -1250,12 +1475,20 @@ private class FakeSoundSystemController : SoundSystemController {
   }
 
   override fun applyStreamVolume(type: VolumeStreamType, percent: Int): Result<VolumeStreams> = runCatching {
-    streams = streams.withUpdatedStream(type, percent)
+    streams = streams.withUpdatedStream(type, percent, minPercent = readStreamMinPercent(type))
     streams
   }
 
   override fun applyAllStreams(streams: VolumeStreams): Result<VolumeStreams> = runCatching {
-    this.streams = streams
+    var updated = this.streams
+    VolumeStreamType.entries.forEach { type ->
+      updated = updated.withUpdatedStream(
+        type = type,
+        percent = streams.percentFor(type),
+        minPercent = readStreamMinPercent(type),
+      )
+    }
+    this.streams = updated
     this.streams
   }
 }
@@ -1428,6 +1661,36 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
     state.value = state.value.copy(soundVibrateEnabledFallback = enabled)
   }
 
+  override suspend fun setRingNotificationLinked(linked: Boolean) {
+    state.value = state.value.copy(ringNotificationLinked = linked)
+  }
+
+  override suspend fun setVisibleFixedStreamsCount(count: Int) {
+    state.value = state.value.copy(
+      visibleFixedStreamsCount = count.coerceIn(1, VolumeStreamType.entries.size),
+    )
+  }
+
+  override suspend fun setStreamSortMode(mode: StreamSortMode) {
+    state.value = state.value.copy(streamSortMode = mode)
+  }
+
+  override suspend fun incrementStreamUsageCount(type: VolumeStreamType) {
+    val currentCounts = state.value.streamUsageCounts.toMutableMap()
+    currentCounts[type] = (currentCounts[type] ?: 0).coerceAtLeast(0) + 1
+    state.value = state.value.copy(streamUsageCounts = currentCounts)
+  }
+
+  override suspend fun setManualStreamOrder(order: List<VolumeStreamType>) {
+    state.value = state.value.copy(
+      manualStreamOrder = VolumeStreamType.normalizeManualStreamOrder(order),
+    )
+  }
+
+  override suspend fun setSecondaryDrawerExpanded(expanded: Boolean) {
+    state.value = state.value.copy(secondaryDrawerExpanded = expanded)
+  }
+
   override suspend fun resetFactoryDefaults() {
     state.value = PersistedSoundPrefs(
       themeMode = state.value.themeMode,
@@ -1438,7 +1701,7 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
   override suspend fun exportBackupJson(): String {
     val current = state.value
     val payload = SoundPrefsBackupPayload(
-      version = 2,
+      version = 3,
       customProfiles = current.customProfiles.map { it.normalized() },
       deletedProfileIds = current.deletedProfileIds,
       scheduleRules = current.scheduleRules,
@@ -1461,6 +1724,12 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       accessControlConfig = current.accessControlConfig,
       systemZenRulesEnabled = current.systemZenRulesEnabled,
       soundVibrateEnabledFallback = current.soundVibrateEnabledFallback,
+      ringNotificationLinked = current.ringNotificationLinked,
+      visibleFixedStreamsCount = current.visibleFixedStreamsCount,
+      streamSortMode = current.streamSortMode,
+      streamUsageCounts = current.streamUsageCounts,
+      manualStreamOrder = current.manualStreamOrder,
+      secondaryDrawerExpanded = current.secondaryDrawerExpanded,
     )
     return Json.encodeToString(payload)
   }
@@ -1491,6 +1760,12 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       accessControlConfig = payload.accessControlConfig,
       systemZenRulesEnabled = payload.systemZenRulesEnabled,
       soundVibrateEnabledFallback = payload.soundVibrateEnabledFallback,
+      ringNotificationLinked = payload.ringNotificationLinked,
+      visibleFixedStreamsCount = payload.visibleFixedStreamsCount.coerceIn(1, VolumeStreamType.entries.size),
+      streamSortMode = payload.streamSortMode,
+      streamUsageCounts = payload.streamUsageCounts.mapValues { (_, v) -> v.coerceAtLeast(0) },
+      manualStreamOrder = VolumeStreamType.normalizeManualStreamOrder(payload.manualStreamOrder),
+      secondaryDrawerExpanded = payload.secondaryDrawerExpanded,
     )
   }
 }

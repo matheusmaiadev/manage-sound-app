@@ -9,6 +9,7 @@ import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundState
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.domain.model.VolumeStreamType
@@ -123,10 +124,33 @@ object AppLabels {
 
     fun streamTypeLabel(type: VolumeStreamType): String =
       when (type) {
-        VolumeStreamType.RING -> tr("Toque (Ring)", "Ring")
-        VolumeStreamType.NOTIFICATION -> tr("Notificações", "Notifications")
         VolumeStreamType.MEDIA -> tr("Mídia", "Media")
+        VolumeStreamType.RING -> tr("Toque", "Ring")
+        VolumeStreamType.NOTIFICATION -> tr("Notificações", "Notifications")
         VolumeStreamType.ALARM -> tr("Alarme", "Alarm")
+        VolumeStreamType.SYSTEM -> tr("Sistema", "System")
+        VolumeStreamType.VOICE_CALL -> tr("Chamada", "Call")
+        VolumeStreamType.ACCESSIBILITY -> tr("Acessibilidade", "Accessibility")
+      }
+
+    fun streamTypeMicroDescription(type: VolumeStreamType): String =
+      when (type) {
+        VolumeStreamType.MEDIA -> tr("Músicas, vídeos e jogos", "Music, videos, and games")
+        VolumeStreamType.RING -> tr("Ligações recebidas", "Incoming calls")
+        VolumeStreamType.NOTIFICATION -> tr("Mensagens e alertas de apps", "App messages and alerts")
+        VolumeStreamType.ALARM -> tr("Despertadores e timers", "Alarms and timers")
+        VolumeStreamType.SYSTEM ->
+          tr("Teclado, toques na tela e bloqueio", "Keyboard, touch, and lock sounds")
+        VolumeStreamType.VOICE_CALL ->
+          tr("Voz da pessoa na ligação", "In-call voice audio")
+        VolumeStreamType.ACCESSIBILITY ->
+          tr("Leitor de tela (TalkBack)", "Screen reader (TalkBack)")
+      }
+
+    fun streamSortModeLabel(mode: StreamSortMode): String =
+      when (mode) {
+        StreamSortMode.MOST_USED -> tr("Mais usados", "Most used")
+        StreamSortMode.MANUAL -> tr("Ordem manual", "Manual order")
       }
 
     fun weekdayShortLabel(day: Weekday): String =
@@ -261,6 +285,37 @@ object AppLabels {
     val extend30MinChip: String get() = "+30m"
     val volumesTitle: String get() = tr("Volumes", "Volumes")
     val fourChannelsBadge: String get() = tr("4 CANAIS", "4 CHANNELS")
+    val secondaryDrawerExpandedLabel: String
+      get() = tr("Ocultar volumes secundários", "Hide secondary volumes")
+    val ringNotificationLinkedMessage: String
+      get() = tr("Toque e Notificações vinculados", "Ring and Notifications linked")
+    val ringNotificationUnlinkedMessage: String
+      get() = tr("Toque e Notificações separados", "Ring and Notifications unlinked")
+
+    fun channelsBadge(fixedCount: Int, totalCount: Int = 7): String =
+      if (fixedCount >= totalCount) {
+        tr("$totalCount CANAIS", "$totalCount CHANNELS")
+      } else {
+        tr("$fixedCount DE $totalCount FIXOS", "$fixedCount OF $totalCount PINNED")
+      }
+
+    fun secondaryDrawerCollapsedLabel(hiddenStreams: List<VolumeStreamType>): String {
+      val names = hiddenStreams.joinToString(", ") { it.label }
+      return tr("Outros volumes ($names)", "Other volumes ($names)")
+    }
+
+    fun ringNotificationLinkContentDescription(linked: Boolean): String =
+      if (linked) {
+        tr(
+          "Toque e Notificações vinculados • Toque para separar",
+          "Ring and Notifications linked • Tap to unlink",
+        )
+      } else {
+        tr(
+          "Toque e Notificações separados • Toque para vincular",
+          "Ring and Notifications unlinked • Tap to link",
+        )
+      }
     val manualOverrideTitle: String get() = tr("Ajustado manualmente", "Manually adjusted")
     val manualOverrideSubtitle: String
       get() = tr("Retoma a rotina no próximo horário", "Resumes routine at next schedule")
@@ -364,6 +419,18 @@ object AppLabels {
     val applyNowButton: String get() = tr("Ativar Este Perfil Agora", "Activate This Profile Now")
     val saveAndActivateButton: String get() = tr("Criar e Ativar", "Create & Activate")
     val createOnlyButton: String get() = tr("Criar Perfil", "Create Profile")
+    val secondaryChannelsSectionTitle: String
+      get() = tr("Canais secundários opcionais (Sistema, Chamada, Acessibilidade)", "Optional secondary channels (System, Call, Accessibility)")
+    val secondaryChannelsSectionSubtitle: String
+      get() = tr(
+        "Desativados por padrão para preservar o volume atual do aparelho ao ativar este perfil.",
+        "Disabled by default so current device volumes are preserved when activating this profile.",
+      )
+    val keepDeviceVolumeLabel: String
+      get() = tr("Manter atual", "Keep current")
+
+    fun secondaryOverridesBadge(count: Int): String =
+      tr("+$count secundário(s)", "+$count secondary")
 
     fun iconOptions(): List<Pair<String, String>> = listOf(
       "work" to tr("Trabalho", "Work"),
@@ -967,6 +1034,45 @@ object AppLabels {
         "$count modo(s) sincronizado(s) com o sistema Android",
         "$count mode(s) synced with Android system",
       )
+
+    val volumeChannelsSectionTitle: String
+      get() = tr("Canais de Volume & Gaveta Inteligente", "Volume Channels & Smart Drawer")
+    val ringNotificationLinkTitle: String
+      get() = tr("Vincular Toque e Notificações", "Link Ring & Notifications")
+    val ringNotificationLinkSubtitle: String
+      get() = tr(
+        "Sincroniza ambos os sliders em tempo real mantendo as duas barras visíveis",
+        "Syncs both sliders in real time while keeping both bars visible",
+      )
+    val visibleFixedStreamsTitle: String
+      get() = tr("Barras Fixas na Tela Inicial", "Pinned Bars on Home Screen")
+    val visibleFixedStreamsSubtitle: String
+      get() = tr(
+        "Escolha quantos canais ficam visíveis fora da gaveta expansível (1 a 7)",
+        "Choose how many channels remain visible outside the expandable drawer (1 to 7)",
+      )
+    val streamSortModeTitle: String
+      get() = tr("Ordenação dos Canais de Volume", "Volume Channel Ordering")
+    val streamSortModeMostUsedSubtitle: String
+      get() = tr(
+        "Prioriza silenciosamente os canais mais ajustados ao abrir a tela, sem pular durante o uso",
+        "Silently prioritizes your most-adjusted channels on screen entry without mid-session jumps",
+      )
+    val streamSortModeManualSubtitle: String
+      get() = tr(
+        "Use as setas para definir a ordem exata das barras fixas e da gaveta",
+        "Use the arrows to define the exact order of pinned and drawer bars",
+      )
+    val pinnedStreamTag: String
+      get() = tr("Fixa", "Pinned")
+    val drawerStreamTag: String
+      get() = tr("Gaveta", "Drawer")
+
+    fun moveStreamUpContentDesc(label: String): String =
+      tr("Mover $label para cima", "Move $label up")
+
+    fun moveStreamDownContentDesc(label: String): String =
+      tr("Mover $label para baixo", "Move $label down")
   }
 
   object AccessControl {

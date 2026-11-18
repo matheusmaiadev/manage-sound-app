@@ -352,6 +352,27 @@ private fun ProfileGroupedCard(
               )
             }
           }
+
+          if (profile.hasSecondaryOverrides) {
+            val secondaryCount = listOfNotNull(
+              profile.overrideSystemPercent,
+              profile.overrideVoiceCallPercent,
+              profile.overrideAccessibilityPercent,
+            ).size
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            ) {
+              Text(
+                text = AppLabels.Profiles.secondaryOverridesBadge(secondaryCount),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+              )
+            }
+          }
         }
       }
     }

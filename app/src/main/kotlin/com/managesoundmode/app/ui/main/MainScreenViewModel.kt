@@ -19,6 +19,7 @@ import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.SoundState
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
@@ -27,6 +28,7 @@ import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.domain.model.Weekday
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -81,12 +83,35 @@ sealed interface MainScreenUiState {
     val hasCompletedOnboarding: Boolean = true,
     val accessControlConfig: AccessControlConfig = AccessControlConfig(),
     val systemZenRulesEnabled: Boolean = true,
+    val streamMinPercents: Map<VolumeStreamType, Int> = emptyMap(),
+    val ringNotificationLinked: Boolean = true,
+    val visibleFixedStreamsCount: Int = 4,
+    val streamSortMode: StreamSortMode = StreamSortMode.MOST_USED,
+    val streamUsageCounts: Map<VolumeStreamType, Int> = emptyMap(),
+    val manualStreamOrder: List<VolumeStreamType> = VolumeStreamType.defaultOrder,
+    val orderedStreams: List<VolumeStreamType> = VolumeStreamType.resolveOrderedStreams(
+      sortMode = streamSortMode,
+      usageCounts = streamUsageCounts,
+      manualOrder = manualStreamOrder,
+    ),
+    val secondaryDrawerExpanded: Boolean = false,
   ) : MainScreenUiState {
     val audioMode: BaseAudioMode
       get() = currentSoundState.audioMode
 
     val vibrateEnabled: Boolean
       get() = currentSoundState.vibrateEnabled
+
+    val fixedVisibleStreams: List<VolumeStreamType>
+      get() = VolumeStreamType.normalizeManualStreamOrder(orderedStreams)
+        .take(visibleFixedStreamsCount.coerceIn(1, VolumeStreamType.entries.size))
+
+    val drawerHiddenStreams: List<VolumeStreamType>
+      get() = VolumeStreamType.normalizeManualStreamOrder(orderedStreams)
+        .drop(visibleFixedStreamsCount.coerceIn(1, VolumeStreamType.entries.size))
+
+    fun minPercentFor(type: VolumeStreamType): Int =
+      (streamMinPercents[type] ?: 0).coerceIn(0, 100)
   }
 
   data class Error(val message: String) : MainScreenUiState
@@ -98,6 +123,7 @@ class MainScreenViewModel(
 
   private val feedbackMessage = MutableStateFlow<String?>(null)
   private val writeSettingsPromptRequested = MutableStateFlow(false)
+  private val latchedMostUsedStreams = AtomicReference<List<VolumeStreamType>?>(null)
 
   val uiState: StateFlow<MainScreenUiState> = combine(
     repository.snapshotStream,
@@ -113,6 +139,19 @@ class MainScreenViewModel(
     }
     if (snapshot.canWriteSystemSettings && showWritePrompt) {
       writeSettingsPromptRequested.value = false
+    }
+
+    val clampedFixedCount = prefs.visibleFixedStreamsCount.coerceIn(1, VolumeStreamType.entries.size)
+    val normalizedManualOrder = VolumeStreamType.normalizeManualStreamOrder(prefs.manualStreamOrder)
+    val orderedStreams = when (prefs.streamSortMode) {
+      StreamSortMode.MANUAL -> normalizedManualOrder
+      StreamSortMode.MOST_USED -> {
+        latchedMostUsedStreams.get() ?: VolumeStreamType.resolveOrderedStreams(
+          sortMode = StreamSortMode.MOST_USED,
+          usageCounts = prefs.streamUsageCounts,
+          manualOrder = normalizedManualOrder,
+        ).also { latchedMostUsedStreams.set(it) }
+      }
     }
 
     MainScreenUiState.Ready(
@@ -157,6 +196,14 @@ class MainScreenViewModel(
       hasCompletedOnboarding = prefs.hasCompletedOnboarding,
       accessControlConfig = prefs.accessControlConfig,
       systemZenRulesEnabled = prefs.systemZenRulesEnabled,
+      streamMinPercents = snapshot.streamMinPercents,
+      ringNotificationLinked = prefs.ringNotificationLinked,
+      visibleFixedStreamsCount = clampedFixedCount,
+      streamSortMode = prefs.streamSortMode,
+      streamUsageCounts = prefs.streamUsageCounts,
+      manualStreamOrder = normalizedManualOrder,
+      orderedStreams = orderedStreams,
+      secondaryDrawerExpanded = prefs.secondaryDrawerExpanded,
     ) as MainScreenUiState
   }
     .catch { throwable ->
@@ -182,10 +229,16 @@ class MainScreenViewModel(
   }
 
   fun onRefreshSystemState() {
+    latchedMostUsedStreams.set(null)
     repository.refreshSystemState()
     viewModelScope.launch {
       repository.evaluateAndApplyRules()
     }
+  }
+
+  fun onLatchStreamOrder() {
+    latchedMostUsedStreams.set(null)
+    repository.refreshSystemState()
   }
 
   fun onNotificationPermissionResult(granted: Boolean) {
@@ -279,6 +332,60 @@ class MainScreenViewModel(
         .onFailure { error ->
           feedbackMessage.value = error.message ?: "Falha ao ajustar volume de ${type.label}"
         }
+    }
+  }
+
+  fun onToggleRingNotificationLink() {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      val currentLinked = (uiState.value as? MainScreenUiState.Ready)?.ringNotificationLinked
+        ?: repository.preferencesStream.first().ringNotificationLinked
+      repository.setRingNotificationLinked(!currentLinked)
+    }
+  }
+
+  fun onSetRingNotificationLinked(linked: Boolean) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      repository.setRingNotificationLinked(linked)
+    }
+  }
+
+  fun onSetVisibleFixedStreamsCount(count: Int) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      repository.setVisibleFixedStreamsCount(count.coerceIn(1, VolumeStreamType.entries.size))
+    }
+  }
+
+  fun onSetStreamSortMode(mode: StreamSortMode) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      latchedMostUsedStreams.set(null)
+      repository.setStreamSortMode(mode)
+    }
+  }
+
+  fun onMoveStreamInManualOrder(type: VolumeStreamType, moveUp: Boolean) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      val currentOrder = (uiState.value as? MainScreenUiState.Ready)?.manualStreamOrder
+        ?: repository.preferencesStream.first().manualStreamOrder
+      val normalized = VolumeStreamType.normalizeManualStreamOrder(currentOrder).toMutableList()
+      val index = normalized.indexOf(type)
+      if (index < 0) return@launch
+      val targetIndex = if (moveUp) index - 1 else index + 1
+      if (targetIndex !in normalized.indices) return@launch
+      val swapped = normalized[targetIndex]
+      normalized[targetIndex] = type
+      normalized[index] = swapped
+      repository.setManualStreamOrder(normalized)
+    }
+  }
+
+  fun onSetSecondaryDrawerExpanded(expanded: Boolean) {
+    viewModelScope.launch {
+      repository.setSecondaryDrawerExpanded(expanded)
     }
   }
 
@@ -761,8 +868,11 @@ class MainScreenViewModel(
   fun onResetFactoryDefaults() {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.BACKUP_AND_FACTORY_RESET)) return@launch
+      latchedMostUsedStreams.set(null)
       repository.resetFactoryDefaults()
         .onSuccess {
+          latchedMostUsedStreams.set(null)
+          repository.refreshSystemState()
           feedbackMessage.value = "Padrões de fábrica restaurados com sucesso"
         }
         .onFailure { error ->
@@ -817,8 +927,11 @@ class MainScreenViewModel(
   fun onImportBackupJson(rawJson: String) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.BACKUP_AND_FACTORY_RESET)) return@launch
+      latchedMostUsedStreams.set(null)
       repository.importBackupJson(rawJson)
         .onSuccess {
+          latchedMostUsedStreams.set(null)
+          repository.refreshSystemState()
           feedbackMessage.value = "Backup importado e aplicado com sucesso"
         }
         .onFailure {

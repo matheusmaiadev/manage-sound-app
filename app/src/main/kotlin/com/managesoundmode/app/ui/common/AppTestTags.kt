@@ -4,6 +4,7 @@ import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.VolumeStreamType
 
@@ -58,10 +59,14 @@ object AppTestTags {
     const val WRITE_SETTINGS_BANNER = "write_settings_banner"
     const val WRITE_SETTINGS_ENABLE_BUTTON = "write_settings_enable_button"
     const val WRITE_SETTINGS_DISMISS_BUTTON = "write_settings_dismiss_button"
+    const val VOLUME_STREAMS_CARD = "volume_streams_card"
+    const val SECONDARY_DRAWER_TOGGLE = "volume_secondary_drawer_toggle"
 
     fun modeButton(mode: SoundMode): String = "mode_button_${mode.name}"
     fun timerChip(minutes: Int): String = "timer_chip_$minutes"
     fun streamSlider(type: VolumeStreamType): String = "slider_${type.name}"
+    fun streamCapsule(type: VolumeStreamType): String = "stream_capsule_${type.name}"
+    fun streamLinkButton(type: VolumeStreamType): String = "stream_link_button_${type.name}"
   }
 
   object Profiles {
@@ -72,6 +77,7 @@ object AppTestTags {
     const val EDITOR_AUDIO_SOUND_BUTTON = "editor_audio_sound_button"
     const val EDITOR_AUDIO_SILENT_BUTTON = "editor_audio_silent_button"
     const val EDITOR_VIBRATE_TOGGLE = "editor_vibrate_toggle"
+    const val EDITOR_SECONDARY_DRAWER_TOGGLE = "profile_editor_secondary_drawer_toggle"
 
     fun card(profileId: String): String = "profile_card_$profileId"
     fun editButton(profileId: String): String = "edit_profile_$profileId"
@@ -79,6 +85,12 @@ object AppTestTags {
     fun menuDuplicateItem(profileId: String): String = "profile_menu_duplicate_$profileId"
     fun menuSetDefaultItem(profileId: String): String = "profile_menu_set_default_$profileId"
     fun menuDeleteItem(profileId: String): String = "profile_menu_delete_$profileId"
+    fun editorSecondaryOverrideSwitch(type: VolumeStreamType): String =
+      "profile_editor_override_switch_${type.name}"
+    fun editorStreamSlider(type: VolumeStreamType): String =
+      "profile_editor_slider_${type.name}"
+    fun editorStreamLinkButton(type: VolumeStreamType): String =
+      "profile_editor_link_button_${type.name}"
   }
 
   object Schedules {
@@ -187,6 +199,15 @@ object AppTestTags {
     const val AUTHORIZE_NOTIFICATION_PERMISSION_BUTTON = "settings_authorize_notification_permission_button"
     const val SYSTEM_ZEN_RULES_SWITCH = "settings_system_zen_rules_switch"
     const val SYNC_ZEN_RULES_BUTTON = "settings_sync_zen_rules_button"
+    const val RING_NOTIFICATION_LINK_SWITCH = "settings_ring_notification_link_switch"
+
+    fun fixedStreamsCountChip(count: Int): String = "settings_fixed_streams_count_$count"
+    fun streamSortModeButton(mode: StreamSortMode): String =
+      "settings_stream_sort_mode_${mode.name}"
+    fun manualOrderMoveUpButton(type: VolumeStreamType): String =
+      "settings_stream_move_up_${type.name}"
+    fun manualOrderMoveDownButton(type: VolumeStreamType): String =
+      "settings_stream_move_down_${type.name}"
   }
 
   object Onboarding {

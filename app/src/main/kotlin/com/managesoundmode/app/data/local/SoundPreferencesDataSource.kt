@@ -16,9 +16,11 @@ import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SavedStateSnapshot
 import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
+import com.managesoundmode.app.domain.model.VolumeStreamType
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -57,10 +59,16 @@ data class SoundPrefsBackupPayload(
   val accessControlConfig: AccessControlConfig = AccessControlConfig(),
   val systemZenRulesEnabled: Boolean = true,
   val soundVibrateEnabledFallback: Boolean = true,
+  val ringNotificationLinked: Boolean = true,
+  val visibleFixedStreamsCount: Int = 4,
+  val streamSortMode: StreamSortMode = StreamSortMode.MOST_USED,
+  val streamUsageCounts: Map<VolumeStreamType, Int> = emptyMap(),
+  val manualStreamOrder: List<VolumeStreamType> = VolumeStreamType.defaultOrder,
+  val secondaryDrawerExpanded: Boolean = false,
 )
 
 data class PersistedSoundPrefs(
-  val schemaVersion: Int = 2,
+  val schemaVersion: Int = 3,
   val activeProfileId: String? = null,
   val activeTimer: TimedModeSession? = null,
   val customProfiles: List<SoundProfile> = emptyList(),
@@ -93,6 +101,12 @@ data class PersistedSoundPrefs(
   val accessControlConfig: AccessControlConfig = AccessControlConfig(),
   val systemZenRulesEnabled: Boolean = true,
   val soundVibrateEnabledFallback: Boolean = true,
+  val ringNotificationLinked: Boolean = true,
+  val visibleFixedStreamsCount: Int = 4,
+  val streamSortMode: StreamSortMode = StreamSortMode.MOST_USED,
+  val streamUsageCounts: Map<VolumeStreamType, Int> = emptyMap(),
+  val manualStreamOrder: List<VolumeStreamType> = VolumeStreamType.defaultOrder,
+  val secondaryDrawerExpanded: Boolean = false,
 )
 
 interface SoundPreferencesDataSource {
@@ -132,6 +146,12 @@ interface SoundPreferencesDataSource {
   suspend fun setAccessControlConfig(config: AccessControlConfig) {}
   suspend fun setSystemZenRulesEnabled(enabled: Boolean) {}
   suspend fun setSoundVibrateEnabledFallback(enabled: Boolean) {}
+  suspend fun setRingNotificationLinked(linked: Boolean) {}
+  suspend fun setVisibleFixedStreamsCount(count: Int) {}
+  suspend fun setStreamSortMode(mode: StreamSortMode) {}
+  suspend fun incrementStreamUsageCount(type: VolumeStreamType) {}
+  suspend fun setManualStreamOrder(order: List<VolumeStreamType>) {}
+  suspend fun setSecondaryDrawerExpanded(expanded: Boolean) {}
   suspend fun resetFactoryDefaults() {}
   suspend fun exportBackupJson(): String = "{}"
   suspend fun importBackupJson(rawJson: String) {}
@@ -211,6 +231,28 @@ class DataStoreSoundPreferencesDataSource(
             .getOrDefault(AccessControlConfig())
         } ?: AccessControlConfig()
 
+        val streamSortMode = prefs[KEY_STREAM_SORT_MODE]?.let { raw ->
+          runCatching { StreamSortMode.valueOf(raw) }.getOrDefault(StreamSortMode.MOST_USED)
+        } ?: StreamSortMode.MOST_USED
+
+        val streamUsageCounts = prefs[KEY_STREAM_USAGE_COUNTS_JSON]?.let { raw ->
+          runCatching {
+            json.decodeFromString<Map<VolumeStreamType, Int>>(raw)
+              .mapValues { (_, count) -> count.coerceIn(0, MAX_USAGE_COUNT) }
+          }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+
+        val manualStreamOrder = prefs[KEY_MANUAL_STREAM_ORDER_JSON]?.let { raw ->
+          runCatching {
+            VolumeStreamType.normalizeManualStreamOrder(
+              json.decodeFromString<List<VolumeStreamType>>(raw),
+            )
+          }.getOrDefault(VolumeStreamType.defaultOrder)
+        } ?: VolumeStreamType.defaultOrder
+
+        val visibleFixedStreamsCount = (prefs[KEY_VISIBLE_FIXED_STREAMS_COUNT] ?: 4)
+          .coerceIn(1, VolumeStreamType.entries.size)
+
         PersistedSoundPrefs(
           schemaVersion = prefs[KEY_SCHEMA_VERSION] ?: CURRENT_SCHEMA_VERSION,
           activeProfileId = activeProfileId,
@@ -245,6 +287,12 @@ class DataStoreSoundPreferencesDataSource(
           accessControlConfig = accessControlConfig,
           systemZenRulesEnabled = prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] ?: true,
           soundVibrateEnabledFallback = prefs[KEY_SOUND_VIBRATE_ENABLED] ?: true,
+          ringNotificationLinked = prefs[KEY_RING_NOTIFICATION_LINKED] ?: true,
+          visibleFixedStreamsCount = visibleFixedStreamsCount,
+          streamSortMode = streamSortMode,
+          streamUsageCounts = streamUsageCounts,
+          manualStreamOrder = manualStreamOrder,
+          secondaryDrawerExpanded = prefs[KEY_SECONDARY_DRAWER_EXPANDED] ?: false,
         )
       }
 
@@ -543,6 +591,49 @@ class DataStoreSoundPreferencesDataSource(
     }
   }
 
+  override suspend fun setRingNotificationLinked(linked: Boolean) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_RING_NOTIFICATION_LINKED] = linked
+    }
+  }
+
+  override suspend fun setVisibleFixedStreamsCount(count: Int) {
+    val clamped = count.coerceIn(1, VolumeStreamType.entries.size)
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_VISIBLE_FIXED_STREAMS_COUNT] = clamped
+    }
+  }
+
+  override suspend fun setStreamSortMode(mode: StreamSortMode) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_STREAM_SORT_MODE] = mode.name
+    }
+  }
+
+  override suspend fun incrementStreamUsageCount(type: VolumeStreamType) {
+    context.soundDataStore.edit { prefs ->
+      val currentMap = prefs[KEY_STREAM_USAGE_COUNTS_JSON]?.let { raw ->
+        runCatching { json.decodeFromString<Map<VolumeStreamType, Int>>(raw) }
+          .getOrDefault(emptyMap())
+      } ?: emptyMap()
+      val nextCount = ((currentMap[type] ?: 0).coerceAtLeast(0) + 1).coerceAtMost(MAX_USAGE_COUNT)
+      prefs[KEY_STREAM_USAGE_COUNTS_JSON] = json.encodeToString(currentMap + (type to nextCount))
+    }
+  }
+
+  override suspend fun setManualStreamOrder(order: List<VolumeStreamType>) {
+    val normalized = VolumeStreamType.normalizeManualStreamOrder(order)
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_MANUAL_STREAM_ORDER_JSON] = json.encodeToString(normalized)
+    }
+  }
+
+  override suspend fun setSecondaryDrawerExpanded(expanded: Boolean) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_SECONDARY_DRAWER_EXPANDED] = expanded
+    }
+  }
+
   override suspend fun resetFactoryDefaults() {
     context.soundDataStore.edit { prefs ->
       prefs[KEY_SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
@@ -569,6 +660,12 @@ class DataStoreSoundPreferencesDataSource(
       prefs.remove(KEY_ACCESS_CONTROL_JSON)
       prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] = true
       prefs[KEY_SOUND_VIBRATE_ENABLED] = true
+      prefs[KEY_RING_NOTIFICATION_LINKED] = true
+      prefs[KEY_VISIBLE_FIXED_STREAMS_COUNT] = 4
+      prefs[KEY_STREAM_SORT_MODE] = StreamSortMode.MOST_USED.name
+      prefs.remove(KEY_STREAM_USAGE_COUNTS_JSON)
+      prefs.remove(KEY_MANUAL_STREAM_ORDER_JSON)
+      prefs[KEY_SECONDARY_DRAWER_EXPANDED] = false
     }
   }
 
@@ -599,6 +696,12 @@ class DataStoreSoundPreferencesDataSource(
       accessControlConfig = current.accessControlConfig.copy(pinCode = null),
       systemZenRulesEnabled = current.systemZenRulesEnabled,
       soundVibrateEnabledFallback = current.soundVibrateEnabledFallback,
+      ringNotificationLinked = current.ringNotificationLinked,
+      visibleFixedStreamsCount = current.visibleFixedStreamsCount,
+      streamSortMode = current.streamSortMode,
+      streamUsageCounts = current.streamUsageCounts,
+      manualStreamOrder = current.manualStreamOrder,
+      secondaryDrawerExpanded = current.secondaryDrawerExpanded,
     )
     return json.encodeToString(payload)
   }
@@ -613,9 +716,12 @@ class DataStoreSoundPreferencesDataSource(
         radiusMeters = rule.radiusMeters.coerceIn(50, 5000),
       )
     }
-    // Migra transparentemente perfis v1 (somente `mode`) para v2 (`audioMode` + `vibrateEnabled`)
+    // Migra transparentemente perfis v1/v2 sem sobrescrever canais secundários não configurados
     val sanitizedProfiles = payload.customProfiles.take(MAX_IMPORTED_ITEMS).map { it.normalized() }
     val sanitizedSchedules = payload.scheduleRules.take(MAX_IMPORTED_ITEMS)
+    val sanitizedUsageCounts = payload.streamUsageCounts
+      .mapValues { (_, count) -> count.coerceIn(0, MAX_USAGE_COUNT) }
+    val sanitizedManualOrder = VolumeStreamType.normalizeManualStreamOrder(payload.manualStreamOrder)
 
     context.soundDataStore.edit { prefs ->
       val existingAccess = prefs[KEY_ACCESS_CONTROL_JSON]?.let { raw ->
@@ -650,15 +756,22 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_ACCESS_CONTROL_JSON] = json.encodeToString(resolvedAccess)
       prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] = payload.systemZenRulesEnabled
       prefs[KEY_SOUND_VIBRATE_ENABLED] = payload.soundVibrateEnabledFallback
+      prefs[KEY_RING_NOTIFICATION_LINKED] = payload.ringNotificationLinked
+      prefs[KEY_VISIBLE_FIXED_STREAMS_COUNT] = payload.visibleFixedStreamsCount.coerceIn(1, VolumeStreamType.entries.size)
+      prefs[KEY_STREAM_SORT_MODE] = payload.streamSortMode.name
+      prefs[KEY_STREAM_USAGE_COUNTS_JSON] = json.encodeToString(sanitizedUsageCounts)
+      prefs[KEY_MANUAL_STREAM_ORDER_JSON] = json.encodeToString(sanitizedManualOrder)
+      prefs[KEY_SECONDARY_DRAWER_EXPANDED] = payload.secondaryDrawerExpanded
     }
   }
 
   private companion object {
     const val TAG = "SoundPrefsDataSource"
-    const val CURRENT_SCHEMA_VERSION = 2
+    const val CURRENT_SCHEMA_VERSION = 3
     const val MAX_LOG_ENTRIES = 30
     const val MAX_IMPORTED_ITEMS = 100
     const val MAX_BACKUP_JSON_CHARS = 512_000
+    const val MAX_USAGE_COUNT = 1_000_000
     val KEY_SCHEMA_VERSION = intPreferencesKey("prefs_schema_version")
     val KEY_ACTIVE_PROFILE_ID = stringPreferencesKey("active_profile_id")
     val KEY_ACTIVE_TIMER_JSON = stringPreferencesKey("active_timer_json")
@@ -692,5 +805,11 @@ class DataStoreSoundPreferencesDataSource(
     val KEY_ACCESS_CONTROL_JSON = stringPreferencesKey("access_control_json")
     val KEY_SYSTEM_ZEN_RULES_ENABLED = booleanPreferencesKey("system_zen_rules_enabled")
     val KEY_SOUND_VIBRATE_ENABLED = booleanPreferencesKey("sound_vibrate_enabled")
+    val KEY_RING_NOTIFICATION_LINKED = booleanPreferencesKey("ring_notification_linked")
+    val KEY_VISIBLE_FIXED_STREAMS_COUNT = intPreferencesKey("visible_fixed_streams_count")
+    val KEY_STREAM_SORT_MODE = stringPreferencesKey("stream_sort_mode")
+    val KEY_STREAM_USAGE_COUNTS_JSON = stringPreferencesKey("stream_usage_counts_json")
+    val KEY_MANUAL_STREAM_ORDER_JSON = stringPreferencesKey("manual_stream_order_json")
+    val KEY_SECONDARY_DRAWER_EXPANDED = booleanPreferencesKey("secondary_drawer_expanded")
   }
 }

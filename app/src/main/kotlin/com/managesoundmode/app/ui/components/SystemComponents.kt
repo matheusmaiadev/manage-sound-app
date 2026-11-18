@@ -1,8 +1,13 @@
 package com.managesoundmode.app.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,18 +33,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DoNotDisturbOn
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RingVolume
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.WbSunny
@@ -147,6 +159,16 @@ fun SoundMode.modeIcon(): ImageVector = when (this) {
 fun BaseAudioMode.audioModeIcon(): ImageVector = when (this) {
   BaseAudioMode.SOUND -> Icons.Default.NotificationsActive
   BaseAudioMode.SILENT -> Icons.Default.DoNotDisturbOn
+}
+
+fun VolumeStreamType.streamIcon(): ImageVector = when (this) {
+  VolumeStreamType.MEDIA -> Icons.Default.MusicNote
+  VolumeStreamType.RING -> Icons.Default.RingVolume
+  VolumeStreamType.NOTIFICATION -> Icons.Default.Notifications
+  VolumeStreamType.ALARM -> Icons.Default.Alarm
+  VolumeStreamType.SYSTEM -> Icons.Default.TouchApp
+  VolumeStreamType.VOICE_CALL -> Icons.Default.Call
+  VolumeStreamType.ACCESSIBILITY -> Icons.Default.AccessibilityNew
 }
 
 /**
@@ -365,22 +387,41 @@ fun M3CheckSwitch(
 @Composable
 fun PillVolumeSliderRow(
   type: VolumeStreamType,
-  icon: ImageVector,
   percent: Int,
   onValueChangeFinished: (Int) -> Unit,
   modifier: Modifier = Modifier,
+  icon: ImageVector = type.streamIcon(),
   accentColor: Color = MaterialTheme.colorScheme.primary,
+  minPercent: Int = 0,
+  microDescription: String? = type.microDescription,
+  isLinked: Boolean? = null,
+  onToggleLink: (() -> Unit)? = null,
+  externalPreviewPercent: Int? = null,
+  onLivePreviewChange: ((Int?) -> Unit)? = null,
+  capsuleTestTag: String = AppTestTags.Now.streamCapsule(type),
+  sliderTestTag: String = AppTestTags.Now.streamSlider(type),
+  linkButtonTestTag: String = AppTestTags.Now.streamLinkButton(type),
 ) {
-  var sliderValue by remember { mutableFloatStateOf(percent.toFloat()) }
+  val clampedMin = minPercent.coerceIn(0, 99)
+  val floorFloat = clampedMin.toFloat()
+  var sliderValue by remember {
+    mutableFloatStateOf(percent.coerceIn(clampedMin, 100).toFloat())
+  }
   var isDragging by remember { mutableStateOf(false) }
 
-  LaunchedEffect(percent) {
+  LaunchedEffect(percent, clampedMin) {
     if (!isDragging) {
-      sliderValue = percent.toFloat()
+      sliderValue = percent.coerceIn(clampedMin, 100).toFloat()
     }
   }
 
-  val currentPercent = sliderValue.roundToInt().coerceIn(0, 100)
+  val displayValue = if (!isDragging && externalPreviewPercent != null) {
+    externalPreviewPercent.coerceIn(clampedMin, 100).toFloat()
+  } else {
+    sliderValue.coerceIn(floorFloat, 100f)
+  }
+
+  val currentPercent = displayValue.roundToInt().coerceIn(clampedMin, 100)
   val animatedFillFraction by animateFloatAsState(
     targetValue = (currentPercent / 100f).coerceIn(0f, 1f),
     animationSpec = tween(durationMillis = 150),
@@ -398,7 +439,8 @@ fun PillVolumeSliderRow(
         width = 1.dp,
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
         shape = capsuleShape,
-      ),
+      )
+      .testTag(capsuleTestTag),
   ) {
     // Camada de preenchimento líquido interno (Zenith Liquid Fill)
     Box(
@@ -431,6 +473,9 @@ fun PillVolumeSliderRow(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Row(
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 8.dp),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -448,47 +493,106 @@ fun PillVolumeSliderRow(
               modifier = Modifier.size(16.dp),
             )
           }
-          Text(
-            text = type.label,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
+          Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+              text = type.label,
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            if (!microDescription.isNullOrBlank()) {
+              Text(
+                text = microDescription,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
         }
 
-        Surface(
-          shape = RoundedCornerShape(50),
-          color = if (currentPercent == 0) {
-            MaterialTheme.colorScheme.surfaceContainerHighest
-          } else {
-            accentColor.copy(alpha = 0.16f)
-          },
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Text(
-            text = "$currentPercent%",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
+          if (isLinked != null && onToggleLink != null) {
+            Surface(
+              shape = CircleShape,
+              color = if (isLinked) {
+                accentColor
+              } else {
+                MaterialTheme.colorScheme.surfaceContainerHighest
+              },
+              border = if (isLinked) {
+                null
+              } else {
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+              },
+              modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onToggleLink)
+                .semantics {
+                  selected = isLinked
+                  contentDescription = AppLabels.Now.ringNotificationLinkContentDescription(isLinked)
+                }
+                .testTag(linkButtonTestTag),
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = if (isLinked) Icons.Default.Link else Icons.Default.LinkOff,
+                  contentDescription = null,
+                  tint = if (isLinked) {
+                    zenithOnActivePillColor()
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  modifier = Modifier.size(14.dp),
+                )
+              }
+            }
+          }
+
+          Surface(
+            shape = RoundedCornerShape(50),
             color = if (currentPercent == 0) {
-              MaterialTheme.colorScheme.onSurfaceVariant
+              MaterialTheme.colorScheme.surfaceContainerHighest
             } else {
-              accentColor
+              accentColor.copy(alpha = 0.16f)
             },
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
-          )
+          ) {
+            Text(
+              text = "$currentPercent%",
+              style = MaterialTheme.typography.labelLarge,
+              fontWeight = FontWeight.Bold,
+              color = if (currentPercent == 0) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              } else {
+                accentColor
+              },
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+            )
+          }
         }
       }
 
       Slider(
-        value = sliderValue,
-        onValueChange = {
+        value = displayValue,
+        onValueChange = { raw ->
           isDragging = true
-          sliderValue = it
+          val clamped = raw.coerceIn(floorFloat, 100f)
+          sliderValue = clamped
+          onLivePreviewChange?.invoke(clamped.roundToInt())
         },
         onValueChangeFinished = {
           isDragging = false
-          onValueChangeFinished(sliderValue.roundToInt())
+          onLivePreviewChange?.invoke(null)
+          onValueChangeFinished(sliderValue.roundToInt().coerceIn(clampedMin, 100))
         },
-        valueRange = 0f..100f,
+        valueRange = floorFloat..100f,
         colors = SliderDefaults.colors(
           thumbColor = accentColor,
           activeTrackColor = accentColor,
@@ -496,7 +600,7 @@ fun PillVolumeSliderRow(
         ),
         modifier = Modifier
           .fillMaxWidth()
-          .testTag(AppTestTags.Now.streamSlider(type)),
+          .testTag(sliderTestTag),
       )
     }
   }
@@ -514,6 +618,8 @@ fun ProfileEditorBottomSheet(
   defaultMode: SoundMode,
   defaultStreams: VolumeStreams,
   defaultSoundState: SoundState = SoundState.fromLegacyMode(defaultMode),
+  streamMinPercents: Map<VolumeStreamType, Int> = emptyMap(),
+  ringNotificationLinkedDefault: Boolean = true,
   onSaveProfile: (profile: SoundProfile, applyNow: Boolean) -> Unit,
   onAutoSaveProfile: (profile: SoundProfile) -> Unit = {},
   onDeleteProfile: ((profileId: String) -> Unit)? = null,
@@ -534,14 +640,63 @@ fun ProfileEditorBottomSheet(
   }
   var notifPercent by rememberSaveable {
     mutableIntStateOf(
-      initialProfile?.streams?.notificationPercent ?: defaultStreams.notificationPercent,
+      if (initialProfile != null) {
+        initialProfile.streams.notificationPercent
+      } else if (ringNotificationLinkedDefault) {
+        defaultStreams.ringPercent
+      } else {
+        defaultStreams.notificationPercent
+      },
     )
   }
+  var editorRingNotifLinked by rememberSaveable {
+    mutableStateOf(
+      if (initialProfile != null) {
+        initialProfile.streams.ringPercent == initialProfile.streams.notificationPercent
+      } else {
+        ringNotificationLinkedDefault
+      },
+    )
+  }
+  var editorLinkedDragPreview by remember { mutableStateOf<Int?>(null) }
   var mediaPercent by rememberSaveable {
     mutableIntStateOf(initialProfile?.streams?.mediaPercent ?: defaultStreams.mediaPercent)
   }
   var alarmPercent by rememberSaveable {
     mutableIntStateOf(initialProfile?.streams?.alarmPercent ?: defaultStreams.alarmPercent)
+  }
+  var secondaryExpanded by rememberSaveable {
+    mutableStateOf(initialProfile?.hasSecondaryOverrides == true)
+  }
+  var overrideSystemEnabled by rememberSaveable {
+    mutableStateOf(initialProfile?.overrideSystemPercent != null)
+  }
+  var systemPercent by rememberSaveable {
+    mutableIntStateOf(
+      initialProfile?.overrideSystemPercent
+        ?: initialProfile?.streams?.systemPercent
+        ?: defaultStreams.systemPercent,
+    )
+  }
+  var overrideVoiceCallEnabled by rememberSaveable {
+    mutableStateOf(initialProfile?.overrideVoiceCallPercent != null)
+  }
+  var voiceCallPercent by rememberSaveable {
+    mutableIntStateOf(
+      initialProfile?.overrideVoiceCallPercent
+        ?: initialProfile?.streams?.voiceCallPercent
+        ?: defaultStreams.voiceCallPercent,
+    )
+  }
+  var overrideAccessibilityEnabled by rememberSaveable {
+    mutableStateOf(initialProfile?.overrideAccessibilityPercent != null)
+  }
+  var accessibilityPercent by rememberSaveable {
+    mutableIntStateOf(
+      initialProfile?.overrideAccessibilityPercent
+        ?: initialProfile?.streams?.accessibilityPercent
+        ?: defaultStreams.accessibilityPercent,
+    )
   }
   var preserveMedia by rememberSaveable {
     mutableStateOf(initialProfile?.preserveMediaIfPlaying ?: true)
@@ -553,15 +708,20 @@ fun ProfileEditorBottomSheet(
   val iconOptions = AppLabels.Profiles.iconOptions()
   val activeAccent = selectedAudioMode.tonalAccentColor()
 
+  fun minFor(type: VolumeStreamType): Int = (streamMinPercents[type] ?: 0).coerceIn(0, 100)
+
   fun buildProfile(): SoundProfile {
     val resolvedName = name.trim().ifEmpty {
       initialProfile?.name ?: AppLabels.Profiles.newProfileTitle
     }
     val streams = VolumeStreams(
-      ringPercent = ringPercent,
-      notificationPercent = notifPercent,
-      mediaPercent = mediaPercent,
-      alarmPercent = alarmPercent,
+      ringPercent = ringPercent.coerceIn(minFor(VolumeStreamType.RING), 100),
+      notificationPercent = notifPercent.coerceIn(minFor(VolumeStreamType.NOTIFICATION), 100),
+      mediaPercent = mediaPercent.coerceIn(minFor(VolumeStreamType.MEDIA), 100),
+      alarmPercent = alarmPercent.coerceIn(minFor(VolumeStreamType.ALARM), 100),
+      systemPercent = systemPercent.coerceIn(minFor(VolumeStreamType.SYSTEM), 100),
+      voiceCallPercent = voiceCallPercent.coerceIn(minFor(VolumeStreamType.VOICE_CALL), 100),
+      accessibilityPercent = accessibilityPercent.coerceIn(minFor(VolumeStreamType.ACCESSIBILITY), 100),
     )
     val state = SoundState(
       audioMode = selectedAudioMode,
@@ -580,6 +740,21 @@ fun ProfileEditorBottomSheet(
       iconKey = iconKey,
       preserveMediaIfPlaying = preserveMedia,
       skipMediaOnBluetooth = skipBluetooth,
+      overrideSystemPercent = if (overrideSystemEnabled) {
+        systemPercent.coerceIn(minFor(VolumeStreamType.SYSTEM), 100)
+      } else {
+        null
+      },
+      overrideVoiceCallPercent = if (overrideVoiceCallEnabled) {
+        voiceCallPercent.coerceIn(minFor(VolumeStreamType.VOICE_CALL), 100)
+      } else {
+        null
+      },
+      overrideAccessibilityPercent = if (overrideAccessibilityEnabled) {
+        accessibilityPercent.coerceIn(minFor(VolumeStreamType.ACCESSIBILITY), 100)
+      } else {
+        null
+      },
     )
   }
 
@@ -799,12 +974,44 @@ fun ProfileEditorBottomSheet(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             PillVolumeSliderRow(
+              type = VolumeStreamType.MEDIA,
+              icon = Icons.Default.MusicNote,
+              percent = mediaPercent,
+              minPercent = minFor(VolumeStreamType.MEDIA),
+              accentColor = activeAccent,
+              sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.MEDIA),
+              onValueChangeFinished = {
+                mediaPercent = it
+                notifyAutoSaveIfEditing()
+              },
+            )
+            PillVolumeSliderRow(
               type = VolumeStreamType.RING,
               icon = Icons.Default.RingVolume,
               percent = ringPercent,
+              minPercent = minFor(VolumeStreamType.RING),
               accentColor = activeAccent,
+              isLinked = editorRingNotifLinked,
+              onToggleLink = {
+                val nextLinked = !editorRingNotifLinked
+                editorRingNotifLinked = nextLinked
+                editorLinkedDragPreview = null
+                if (nextLinked) {
+                  notifPercent = ringPercent
+                }
+                notifyAutoSaveIfEditing()
+              },
+              externalPreviewPercent = if (editorRingNotifLinked) editorLinkedDragPreview else null,
+              onLivePreviewChange = { preview ->
+                editorLinkedDragPreview = if (editorRingNotifLinked) preview else null
+              },
+              sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.RING),
+              linkButtonTestTag = AppTestTags.Profiles.editorStreamLinkButton(VolumeStreamType.RING),
               onValueChangeFinished = {
                 ringPercent = it
+                if (editorRingNotifLinked) {
+                  notifPercent = it
+                }
                 notifyAutoSaveIfEditing()
               },
             )
@@ -812,19 +1019,29 @@ fun ProfileEditorBottomSheet(
               type = VolumeStreamType.NOTIFICATION,
               icon = Icons.Default.Notifications,
               percent = notifPercent,
+              minPercent = minFor(VolumeStreamType.NOTIFICATION),
               accentColor = activeAccent,
-              onValueChangeFinished = {
-                notifPercent = it
+              isLinked = editorRingNotifLinked,
+              onToggleLink = {
+                val nextLinked = !editorRingNotifLinked
+                editorRingNotifLinked = nextLinked
+                editorLinkedDragPreview = null
+                if (nextLinked) {
+                  notifPercent = ringPercent
+                }
                 notifyAutoSaveIfEditing()
               },
-            )
-            PillVolumeSliderRow(
-              type = VolumeStreamType.MEDIA,
-              icon = Icons.Default.MusicNote,
-              percent = mediaPercent,
-              accentColor = activeAccent,
+              externalPreviewPercent = if (editorRingNotifLinked) editorLinkedDragPreview else null,
+              onLivePreviewChange = { preview ->
+                editorLinkedDragPreview = if (editorRingNotifLinked) preview else null
+              },
+              sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.NOTIFICATION),
+              linkButtonTestTag = AppTestTags.Profiles.editorStreamLinkButton(VolumeStreamType.NOTIFICATION),
               onValueChangeFinished = {
-                mediaPercent = it
+                notifPercent = it
+                if (editorRingNotifLinked) {
+                  ringPercent = it
+                }
                 notifyAutoSaveIfEditing()
               },
             )
@@ -832,12 +1049,122 @@ fun ProfileEditorBottomSheet(
               type = VolumeStreamType.ALARM,
               icon = Icons.Default.Alarm,
               percent = alarmPercent,
+              minPercent = minFor(VolumeStreamType.ALARM),
               accentColor = activeAccent,
+              sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.ALARM),
               onValueChangeFinished = {
                 alarmPercent = it
                 notifyAutoSaveIfEditing()
               },
             )
+
+            // Gaveta de Canais Secundários Opcionais (Sistema, Chamada, Acessibilidade)
+            Surface(
+              shape = RoundedCornerShape(18.dp),
+              color = MaterialTheme.colorScheme.surfaceContainer,
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .clickable { secondaryExpanded = !secondaryExpanded }
+                .testTag(AppTestTags.Profiles.EDITOR_SECONDARY_DRAWER_TOGGLE),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 11.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text(
+                  text = if (secondaryExpanded) {
+                    AppLabels.Now.secondaryDrawerExpandedLabel
+                  } else {
+                    AppLabels.Now.secondaryDrawerCollapsedLabel(
+                      VolumeStreamType.secondaryDefaultStreams,
+                    )
+                  },
+                  style = MaterialTheme.typography.labelLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp),
+                )
+                Icon(
+                  imageVector = if (secondaryExpanded) {
+                    Icons.Default.ExpandLess
+                  } else {
+                    Icons.Default.ExpandMore
+                  },
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+            }
+
+            AnimatedVisibility(
+              visible = secondaryExpanded,
+              enter = expandVertically() + fadeIn(),
+              exit = shrinkVertically() + fadeOut(),
+            ) {
+              Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                  text = AppLabels.Profiles.secondaryChannelsSectionSubtitle,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                ProfileOptionalSecondaryStreamControl(
+                  type = VolumeStreamType.SYSTEM,
+                  enabled = overrideSystemEnabled,
+                  percent = systemPercent,
+                  minPercent = minFor(VolumeStreamType.SYSTEM),
+                  accentColor = activeAccent,
+                  onToggleEnabled = { enabled ->
+                    overrideSystemEnabled = enabled
+                    notifyAutoSaveIfEditing()
+                  },
+                  onPercentChanged = { next ->
+                    systemPercent = next
+                    notifyAutoSaveIfEditing()
+                  },
+                )
+                ProfileOptionalSecondaryStreamControl(
+                  type = VolumeStreamType.VOICE_CALL,
+                  enabled = overrideVoiceCallEnabled,
+                  percent = voiceCallPercent,
+                  minPercent = minFor(VolumeStreamType.VOICE_CALL),
+                  accentColor = activeAccent,
+                  onToggleEnabled = { enabled ->
+                    overrideVoiceCallEnabled = enabled
+                    notifyAutoSaveIfEditing()
+                  },
+                  onPercentChanged = { next ->
+                    voiceCallPercent = next
+                    notifyAutoSaveIfEditing()
+                  },
+                )
+                ProfileOptionalSecondaryStreamControl(
+                  type = VolumeStreamType.ACCESSIBILITY,
+                  enabled = overrideAccessibilityEnabled,
+                  percent = accessibilityPercent,
+                  minPercent = minFor(VolumeStreamType.ACCESSIBILITY),
+                  accentColor = activeAccent,
+                  onToggleEnabled = { enabled ->
+                    overrideAccessibilityEnabled = enabled
+                    notifyAutoSaveIfEditing()
+                  },
+                  onPercentChanged = { next ->
+                    accessibilityPercent = next
+                    notifyAutoSaveIfEditing()
+                  },
+                )
+              }
+            }
           }
         }
 
@@ -947,6 +1274,95 @@ fun ProfileEditorBottomSheet(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ProfileOptionalSecondaryStreamControl(
+  type: VolumeStreamType,
+  enabled: Boolean,
+  percent: Int,
+  minPercent: Int,
+  accentColor: Color,
+  onToggleEnabled: (Boolean) -> Unit,
+  onPercentChanged: (Int) -> Unit,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Surface(
+      shape = RoundedCornerShape(18.dp),
+      color = MaterialTheme.colorScheme.surfaceContainer,
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)),
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(30.dp)
+              .clip(CircleShape)
+              .background(accentColor.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = type.streamIcon(),
+              contentDescription = null,
+              tint = accentColor,
+              modifier = Modifier.size(15.dp),
+            )
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+              text = type.label,
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+              text = if (enabled) {
+                type.microDescription
+              } else {
+                "${AppLabels.Profiles.keepDeviceVolumeLabel} • ${type.microDescription}"
+              },
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+
+        M3CheckSwitch(
+          checked = enabled,
+          onCheckedChange = onToggleEnabled,
+          modifier = Modifier.testTag(AppTestTags.Profiles.editorSecondaryOverrideSwitch(type)),
+        )
+      }
+    }
+
+    if (enabled) {
+      PillVolumeSliderRow(
+        type = type,
+        percent = percent,
+        minPercent = minPercent,
+        accentColor = accentColor,
+        sliderTestTag = AppTestTags.Profiles.editorStreamSlider(type),
+        onValueChangeFinished = onPercentChanged,
+      )
     }
   }
 }

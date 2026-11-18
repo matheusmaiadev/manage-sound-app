@@ -15,6 +15,7 @@ import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.SoundState
+import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
@@ -111,6 +112,11 @@ interface SoundModeRepository {
   suspend fun setOnboardingCompleted(completed: Boolean): Result<Unit>
   suspend fun setAccessControlConfig(config: AccessControlConfig): Result<Unit> = Result.success(Unit)
   suspend fun setSystemZenRulesEnabled(enabled: Boolean): Result<Unit> = Result.success(Unit)
+  suspend fun setRingNotificationLinked(linked: Boolean): Result<Unit> = Result.success(Unit)
+  suspend fun setVisibleFixedStreamsCount(count: Int): Result<Unit> = Result.success(Unit)
+  suspend fun setStreamSortMode(mode: StreamSortMode): Result<Unit> = Result.success(Unit)
+  suspend fun setManualStreamOrder(order: List<VolumeStreamType>): Result<Unit> = Result.success(Unit)
+  suspend fun setSecondaryDrawerExpanded(expanded: Boolean): Result<Unit> = Result.success(Unit)
   suspend fun syncSystemZenRulesNow(): Result<Int> = Result.success(0)
   suspend fun syncExternalSurfacesNow(): Result<Unit> = Result.success(Unit)
   suspend fun syncBackgroundGeofencesNow(): Result<Int> = Result.success(0)
@@ -258,6 +264,7 @@ class DefaultSoundModeRepository(
       activeRuleSubtitle = ruleSubtitle,
       activeRuleSessionKey = ruleKey,
       isManuallyOverridden = overridden,
+      streamMinPercents = systemController.readStreamMinPercents(),
     )
   }
 
@@ -391,6 +398,7 @@ class DefaultSoundModeRepository(
   }
 
   override suspend fun setStreamVolume(type: VolumeStreamType, percent: Int): Result<Unit> {
+    val prefsBefore = preferencesDataSource.prefsFlow.first()
     val stateBefore = systemController.readSoundState()
     var switchedToSound = false
     if ((type == VolumeStreamType.RING || type == VolumeStreamType.NOTIFICATION) &&
@@ -406,7 +414,21 @@ class DefaultSoundModeRepository(
       lastObservedState.set(soundTarget)
       switchedToSound = true
     }
-    return systemController.applyStreamVolume(type, percent).map {
+
+    val applyResult = if (
+      prefsBefore.ringNotificationLinked &&
+      (type == VolumeStreamType.RING || type == VolumeStreamType.NOTIFICATION)
+    ) {
+      systemController.applyStreamVolume(VolumeStreamType.RING, percent).fold(
+        onSuccess = { systemController.applyStreamVolume(VolumeStreamType.NOTIFICATION, percent) },
+        onFailure = { Result.failure(it) },
+      )
+    } else {
+      systemController.applyStreamVolume(type, percent)
+    }
+
+    return applyResult.map {
+      preferencesDataSource.incrementStreamUsageCount(type)
       val stateAfter = systemController.readSoundState()
       lastObservedState.set(stateAfter)
       if (type == VolumeStreamType.MEDIA) {
@@ -1014,6 +1036,46 @@ class DefaultSoundModeRepository(
     refreshSystemState()
   }
 
+  override suspend fun setRingNotificationLinked(linked: Boolean): Result<Unit> = runCatching {
+    preferencesDataSource.setRingNotificationLinked(linked)
+    if (linked) {
+      val currentState = systemController.readSoundState()
+      val currentStreams = systemController.readVolumeStreams()
+      if (currentState.audioMode == BaseAudioMode.SOUND &&
+        currentStreams.ringPercent != currentStreams.notificationPercent
+      ) {
+        systemController.applyStreamVolume(
+          VolumeStreamType.NOTIFICATION,
+          currentStreams.ringPercent,
+        )
+        val updatedPrefs = preferencesDataSource.prefsFlow.first()
+        persistLastActiveSoundSnapshot(currentState, systemController.readVolumeStreams(), updatedPrefs)
+      }
+    }
+    onRefreshExternalSurfaces()
+    refreshSystemState()
+  }
+
+  override suspend fun setVisibleFixedStreamsCount(count: Int): Result<Unit> = runCatching {
+    preferencesDataSource.setVisibleFixedStreamsCount(count.coerceIn(1, VolumeStreamType.entries.size))
+    refreshSystemState()
+  }
+
+  override suspend fun setStreamSortMode(mode: StreamSortMode): Result<Unit> = runCatching {
+    preferencesDataSource.setStreamSortMode(mode)
+    refreshSystemState()
+  }
+
+  override suspend fun setManualStreamOrder(order: List<VolumeStreamType>): Result<Unit> = runCatching {
+    preferencesDataSource.setManualStreamOrder(VolumeStreamType.normalizeManualStreamOrder(order))
+    refreshSystemState()
+  }
+
+  override suspend fun setSecondaryDrawerExpanded(expanded: Boolean): Result<Unit> = runCatching {
+    preferencesDataSource.setSecondaryDrawerExpanded(expanded)
+    refreshSystemState()
+  }
+
   override suspend fun syncSystemZenRulesNow(): Result<Int> = runCatching {
     val prefs = preferencesDataSource.prefsFlow.first()
     val allProfiles = mergeProfiles(prefs.customProfiles, prefs.deletedProfileIds)
@@ -1365,11 +1427,9 @@ class DefaultSoundModeRepository(
     preferencesDataSource.setLastActiveSoundSnapshot(
       SavedStateSnapshot(
         mode = SoundMode.NORMAL,
-        streams = VolumeStreams(
+        streams = streams.copy(
           ringPercent = resolvedRing,
           notificationPercent = resolvedNotif,
-          mediaPercent = streams.mediaPercent,
-          alarmPercent = streams.alarmPercent,
         ),
         capturedAtEpochMillis = clockNowMillis(),
         audioMode = BaseAudioMode.SOUND,
@@ -1410,7 +1470,12 @@ class DefaultSoundModeRepository(
     } ?: allProfiles.firstOrNull { it.resolvedAudioMode == BaseAudioMode.SOUND }
       ?: SoundProfile.defaultPresets.first()
     val resolvedMedia = prefs.savedMediaBeforeMute ?: fallbackProfile.streams.mediaPercent
-    return fallbackProfile.resolvedSoundState to fallbackProfile.streams.copy(mediaPercent = resolvedMedia)
+    return fallbackProfile.resolvedSoundState to fallbackProfile.streams.copy(
+      mediaPercent = resolvedMedia,
+      systemPercent = fallbackProfile.overrideSystemPercent ?: hardwareStreams.systemPercent,
+      voiceCallPercent = fallbackProfile.overrideVoiceCallPercent ?: hardwareStreams.voiceCallPercent,
+      accessibilityPercent = fallbackProfile.overrideAccessibilityPercent ?: hardwareStreams.accessibilityPercent,
+    )
   }
 
   private suspend fun syncMediaProtectionNow() {
@@ -1447,6 +1512,15 @@ class DefaultSoundModeRepository(
       systemController.applyStreamVolume(VolumeStreamType.MEDIA, profile.streams.mediaPercent).getOrThrow()
     }
     systemController.applyStreamVolume(VolumeStreamType.ALARM, profile.streams.alarmPercent).getOrThrow()
+    profile.overrideSystemPercent?.let { targetSystem ->
+      systemController.applyStreamVolume(VolumeStreamType.SYSTEM, targetSystem).getOrThrow()
+    }
+    profile.overrideVoiceCallPercent?.let { targetCall ->
+      systemController.applyStreamVolume(VolumeStreamType.VOICE_CALL, targetCall).getOrThrow()
+    }
+    profile.overrideAccessibilityPercent?.let { targetA11y ->
+      systemController.applyStreamVolume(VolumeStreamType.ACCESSIBILITY, targetA11y).getOrThrow()
+    }
   }
 
   private suspend fun markManualOverrideIfRuleActive(): String? {

@@ -16,7 +16,27 @@ data class SoundProfile(
   val skipMediaOnBluetooth: Boolean = true,
   val audioMode: BaseAudioMode? = null,
   val vibrateEnabled: Boolean? = null,
+  val overrideSystemPercent: Int? = null,
+  val overrideVoiceCallPercent: Int? = null,
+  val overrideAccessibilityPercent: Int? = null,
 ) {
+  init {
+    require(overrideSystemPercent == null || overrideSystemPercent in 0..100) {
+      "overrideSystemPercent must be null or between 0 and 100"
+    }
+    require(overrideVoiceCallPercent == null || overrideVoiceCallPercent in 0..100) {
+      "overrideVoiceCallPercent must be null or between 0 and 100"
+    }
+    require(overrideAccessibilityPercent == null || overrideAccessibilityPercent in 0..100) {
+      "overrideAccessibilityPercent must be null or between 0 and 100"
+    }
+  }
+
+  val hasSecondaryOverrides: Boolean
+    get() = overrideSystemPercent != null ||
+      overrideVoiceCallPercent != null ||
+      overrideAccessibilityPercent != null
+
   val resolvedAudioMode: BaseAudioMode
     get() = audioMode ?: SoundState.fromLegacyMode(mode).audioMode
 
@@ -30,7 +50,7 @@ data class SoundProfile(
     )
 
   /**
-   * Normaliza o perfil para o schema v2 populando explicitamente [audioMode], [vibrateEnabled]
+   * Normaliza o perfil para o schema atual populando explicitamente [audioMode], [vibrateEnabled]
    * e alinhando [mode] à aproximação legada correspondente.
    */
   fun normalized(): SoundProfile {
@@ -39,6 +59,9 @@ data class SoundProfile(
       mode = state.toLegacyApproximation(),
       audioMode = state.audioMode,
       vibrateEnabled = state.vibrateEnabled,
+      overrideSystemPercent = overrideSystemPercent?.coerceIn(0, 100),
+      overrideVoiceCallPercent = overrideVoiceCallPercent?.coerceIn(0, 100),
+      overrideAccessibilityPercent = overrideAccessibilityPercent?.coerceIn(0, 100),
     )
   }
 

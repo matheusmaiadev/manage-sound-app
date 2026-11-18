@@ -40,6 +40,9 @@ interface SoundSystemController {
   fun readCurrentMode(): SoundMode
   fun readSoundState(): SoundState = SoundState.fromLegacyMode(readCurrentMode())
   fun readVolumeStreams(): VolumeStreams
+  fun readStreamMinPercent(type: VolumeStreamType): Int = 0
+  fun readStreamMinPercents(): Map<VolumeStreamType, Int> =
+    VolumeStreamType.entries.associateWith { readStreamMinPercent(it) }
   fun hasDndPermission(): Boolean
   fun canWriteSystemSettings(): Boolean = true
   fun canScheduleExactAlarms(): Boolean = true
@@ -167,7 +170,18 @@ class AndroidSoundSystemController(
       notificationPercent = readStreamPercent(manager, AudioManager.STREAM_NOTIFICATION),
       mediaPercent = readStreamPercent(manager, AudioManager.STREAM_MUSIC),
       alarmPercent = readStreamPercent(manager, AudioManager.STREAM_ALARM),
+      systemPercent = readStreamPercent(manager, AudioManager.STREAM_SYSTEM),
+      voiceCallPercent = readStreamPercent(manager, AudioManager.STREAM_VOICE_CALL),
+      accessibilityPercent = readStreamPercent(manager, AudioManager.STREAM_ACCESSIBILITY),
     )
+  }
+
+  override fun readStreamMinPercent(type: VolumeStreamType): Int {
+    val manager = audioManager ?: return 0
+    val streamConstant = type.toAndroidStream()
+    val max = manager.getStreamMaxVolume(streamConstant).coerceAtLeast(1)
+    val min = readStreamMinIndex(manager, streamConstant, max)
+    return ((min.toFloat() / max.toFloat()) * 100f).roundToInt().coerceIn(0, 100)
   }
 
   override fun hasDndPermission(): Boolean {
@@ -300,6 +314,9 @@ class AndroidSoundSystemController(
     setStreamPercent(manager, AudioManager.STREAM_NOTIFICATION, streams.notificationPercent)
     setStreamPercent(manager, AudioManager.STREAM_MUSIC, streams.mediaPercent)
     setStreamPercent(manager, AudioManager.STREAM_ALARM, streams.alarmPercent)
+    setStreamPercent(manager, AudioManager.STREAM_SYSTEM, streams.systemPercent)
+    setStreamPercent(manager, AudioManager.STREAM_VOICE_CALL, streams.voiceCallPercent)
+    setStreamPercent(manager, AudioManager.STREAM_ACCESSIBILITY, streams.accessibilityPercent)
     readVolumeStreams()
   }.onFailure { error ->
     Log.e(TAG, "Erro ao aplicar múltiplos canais de volume", error)
@@ -332,6 +349,12 @@ class AndroidSoundSystemController(
     externalChangeDetected.set(false)
   }
 
+  private fun readStreamMinIndex(manager: AudioManager, streamType: Int, max: Int): Int {
+    return runCatching { manager.getStreamMinVolume(streamType) }
+      .getOrDefault(0)
+      .coerceIn(0, max)
+  }
+
   private fun readStreamPercent(manager: AudioManager, streamType: Int): Int {
     val max = manager.getStreamMaxVolume(streamType).coerceAtLeast(1)
     val current = manager.getStreamVolume(streamType).coerceIn(0, max)
@@ -339,15 +362,17 @@ class AndroidSoundSystemController(
   }
 
   private fun setStreamPercent(manager: AudioManager, streamType: Int, percent: Int) {
-    val clampedPercent = percent.coerceIn(0, 100)
     val max = manager.getStreamMaxVolume(streamType).coerceAtLeast(1)
-    val currentIndex = manager.getStreamVolume(streamType).coerceIn(0, max)
+    val min = readStreamMinIndex(manager, streamType, max)
+    val minPercent = ((min.toFloat() / max.toFloat()) * 100f).roundToInt().coerceIn(0, 100)
+    val clampedPercent = percent.coerceIn(minPercent, 100)
+    val currentIndex = manager.getStreamVolume(streamType).coerceIn(min, max)
     val currentPercent = ((currentIndex.toFloat() / max.toFloat()) * 100f).roundToInt().coerceIn(0, 100)
-    var targetIndex = ((clampedPercent / 100f) * max).roundToInt().coerceIn(0, max)
+    var targetIndex = ((clampedPercent / 100f) * max).roundToInt().coerceIn(min, max)
     if (clampedPercent > currentPercent && targetIndex <= currentIndex) {
       targetIndex = (currentIndex + 1).coerceAtMost(max)
     } else if (clampedPercent < currentPercent && targetIndex >= currentIndex) {
-      targetIndex = (currentIndex - 1).coerceAtLeast(0)
+      targetIndex = (currentIndex - 1).coerceAtLeast(min)
     }
     manager.setStreamVolume(streamType, targetIndex, 0)
   }
@@ -357,6 +382,9 @@ class AndroidSoundSystemController(
     VolumeStreamType.NOTIFICATION -> AudioManager.STREAM_NOTIFICATION
     VolumeStreamType.MEDIA -> AudioManager.STREAM_MUSIC
     VolumeStreamType.ALARM -> AudioManager.STREAM_ALARM
+    VolumeStreamType.SYSTEM -> AudioManager.STREAM_SYSTEM
+    VolumeStreamType.VOICE_CALL -> AudioManager.STREAM_VOICE_CALL
+    VolumeStreamType.ACCESSIBILITY -> AudioManager.STREAM_ACCESSIBILITY
   }
 
   private companion object {
