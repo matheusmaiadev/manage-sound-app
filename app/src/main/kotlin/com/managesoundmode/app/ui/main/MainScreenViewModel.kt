@@ -188,6 +188,16 @@ class MainScreenViewModel(
     }
   }
 
+  fun onNotificationPermissionResult(granted: Boolean) {
+    repository.refreshSystemState()
+    viewModelScope.launch {
+      repository.evaluateAndApplyRules()
+      if (granted) {
+        repository.syncExternalSurfacesNow()
+      }
+    }
+  }
+
   fun onSelectMode(mode: SoundMode) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
@@ -220,7 +230,10 @@ class MainScreenViewModel(
       val readyBefore = uiState.value as? MainScreenUiState.Ready
       repository.setVibrateEnabled(enabled)
         .onSuccess { applied ->
-          if (applied.audioMode == BaseAudioMode.SOUND && readyBefore?.canWriteSystemSettings == false) {
+          val canWriteNow = (uiState.value as? MainScreenUiState.Ready)?.canWriteSystemSettings
+            ?: readyBefore?.canWriteSystemSettings
+            ?: true
+          if (applied.audioMode == BaseAudioMode.SOUND && (readyBefore?.canWriteSystemSettings == false || !canWriteNow)) {
             writeSettingsPromptRequested.value = true
             feedbackMessage.value = AppLabels.Now.writeSettingsPromptMessage
           } else {
@@ -239,7 +252,10 @@ class MainScreenViewModel(
       val readyBefore = uiState.value as? MainScreenUiState.Ready
       repository.toggleVibrate()
         .onSuccess { applied ->
-          if (applied.audioMode == BaseAudioMode.SOUND && readyBefore?.canWriteSystemSettings == false) {
+          val canWriteNow = (uiState.value as? MainScreenUiState.Ready)?.canWriteSystemSettings
+            ?: readyBefore?.canWriteSystemSettings
+            ?: true
+          if (applied.audioMode == BaseAudioMode.SOUND && (readyBefore?.canWriteSystemSettings == false || !canWriteNow)) {
             writeSettingsPromptRequested.value = true
             feedbackMessage.value = AppLabels.Now.writeSettingsPromptMessage
           } else {

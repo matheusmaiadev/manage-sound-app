@@ -1,9 +1,16 @@
 package com.managesoundmode.app.e2e
 
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.Settings
+import android.view.View
+import android.widget.FrameLayout
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -25,8 +32,14 @@ import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.ThemeMode
+import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.VolumeStreamType
+import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.R
+import com.managesoundmode.app.receiver.SystemAutomationReceiver
 import com.managesoundmode.app.system.BackgroundGeofenceManager
+import com.managesoundmode.app.system.InternalIntentSecurity
+import com.managesoundmode.app.system.SmartNotificationManager
 import com.managesoundmode.app.system.SystemZenRuleManager
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
@@ -93,12 +106,13 @@ class ManageSoundModeE2ETest {
     runBlocking {
       val prefs = app.container.preferencesDataSource
       prefs.resetFactoryDefaults()
-      prefs.clearTransitionLogs()
       prefs.setActiveTimer(null)
       prefs.setThemeMode(ThemeMode.DARK)
       prefs.setAppLanguageCode("PT_BR")
       prefs.setLocationDisclosureAccepted(false)
       prefs.setOnboardingCompleted(true)
+      app.container.soundModeRepository.evaluateAndApplyRules()
+      prefs.clearTransitionLogs()
       app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
       app.container.soundModeRepository.refreshSystemState()
     }
@@ -479,6 +493,7 @@ class ManageSoundModeE2ETest {
     try {
       // Isola de qualquer horário do relógio real e revoga WRITE_SETTINGS sincronamente
       execShellCommandSync("appops set ${app.packageName} WRITE_SETTINGS deny")
+      composeRule.waitUntil(5_000L) { !app.container.soundSystemController.canWriteSystemSettings() }
       runBlocking {
         app.container.preferencesDataSource.setAutomationsPaused(true)
         app.container.soundSystemController.applySoundState(SoundState(BaseAudioMode.SOUND, true))
@@ -513,6 +528,7 @@ class ManageSoundModeE2ETest {
 
       // 3. Concede WRITE_SETTINGS via appops -> alternar Vibrar em Som atualiza Settings.System sem reexibir Banner
       execShellCommandSync("appops set ${app.packageName} WRITE_SETTINGS allow")
+      composeRule.waitUntil(5_000L) { app.container.soundSystemController.canWriteSystemSettings() }
       runBlocking {
         app.container.soundModeRepository.refreshSystemState()
       }
@@ -589,6 +605,197 @@ class ManageSoundModeE2ETest {
     } finally {
       execShellCommandSync("appops set ${app.packageName} WRITE_SETTINGS default")
       runBlocking {
+        app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
+      }
+    }
+  }
+
+  @Test
+  fun e2e09_spec006_s3NotificationDrawerOverhaul_remoteViewsQuickBarIsolatedGroupsPreSilenceTimerAndI18n() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      runCatching {
+        InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(
+          app.packageName,
+          Manifest.permission.POST_NOTIFICATIONS,
+        )
+      }
+    }
+    val notificationManager = app.getSystemService(NotificationManager::class.java)!!
+    notificationManager.cancelAll()
+
+    try {
+      // 1. Verificar criação dos 5 canais isolados e importâncias corretas
+      SmartNotificationManager.ensureChannels(app)
+      val promptCh = notificationManager.getNotificationChannel(SmartNotificationManager.CHANNEL_SMART_PROMPT)
+      val timerCh = notificationManager.getNotificationChannel(SmartNotificationManager.CHANNEL_ACTIVE_TIMER)
+      val overrideCh = notificationManager.getNotificationChannel(SmartNotificationManager.CHANNEL_RULE_OVERRIDE)
+      val quickBarCh = notificationManager.getNotificationChannel(SmartNotificationManager.CHANNEL_PERSISTENT_QUICK_BAR)
+      val autoCh = notificationManager.getNotificationChannel(SmartNotificationManager.CHANNEL_AUTO_TRANSITION)
+
+      assertNotNull(promptCh)
+      assertNotNull(timerCh)
+      assertNotNull(overrideCh)
+      assertNotNull(quickBarCh)
+      assertNotNull(autoCh)
+      assertEquals(NotificationManager.IMPORTANCE_HIGH, promptCh.importance)
+      assertNull(promptCh.sound)
+      assertEquals(false, promptCh.shouldVibrate())
+      assertEquals(NotificationManager.IMPORTANCE_LOW, quickBarCh.importance)
+      assertEquals(NotificationManager.IMPORTANCE_LOW, autoCh.importance)
+
+      // 2. Publicar as notificações e validar AC-01 (RemoteViews 1-Toque sem minutos estáticos + deleteIntent) e AC-02 (Zero Auto-Bundling)
+      val now = System.currentTimeMillis()
+      val sampleTimer = TimedModeSession(
+        targetMode = com.managesoundmode.app.domain.model.SoundMode.VIBRATE,
+        previousMode = com.managesoundmode.app.domain.model.SoundMode.NORMAL,
+        previousStreams = VolumeStreams(ringPercent = 80, notificationPercent = 75, mediaPercent = 55, alarmPercent = 90),
+        durationMinutes = 30,
+        startedAtEpochMillis = now,
+        endsAtEpochMillis = now + 30 * 60_000L,
+        audioMode = BaseAudioMode.SILENT,
+        vibrateEnabled = true,
+        previousAudioMode = BaseAudioMode.SOUND,
+        previousVibrateEnabled = true,
+      )
+
+      SmartNotificationManager.syncPersistentQuickBarNotification(
+        context = app,
+        enabled = true,
+        currentMode = com.managesoundmode.app.domain.model.SoundMode.VIBRATE,
+        currentSoundState = SoundState(BaseAudioMode.SILENT, true),
+        streams = VolumeStreams(ringPercent = 0, notificationPercent = 0, mediaPercent = 0, alarmPercent = 90),
+        activeProfileName = "Trabalho",
+        activeTimer = sampleTimer,
+        hasDndPermission = true,
+      )
+      SmartNotificationManager.syncActiveTimerNotification(app, sampleTimer)
+      SmartNotificationManager.showSmartRestorePrompt(
+        context = app,
+        mode = com.managesoundmode.app.domain.model.SoundMode.VIBRATE,
+        mediaAutoMuted = true,
+        state = SoundState(BaseAudioMode.SILENT, true),
+      )
+      SmartNotificationManager.showRuleOverrideAlert(app, "Dormir")
+      SmartNotificationManager.showAutoRoutineTransition(
+        context = app,
+        title = AppLabels.Notifications.autoRoutineActivatedTitle("Trabalho"),
+        subtitle = AppLabels.Notifications.autoRoutineActivatedSubtitle("Trabalho", "Som + Vibrar"),
+        state = SoundState(BaseAudioMode.SOUND, true),
+      )
+
+      composeRule.waitUntil(5_000L) {
+        val ids = notificationManager.activeNotifications.map { it.id }.toSet()
+        ids.containsAll(
+          setOf(
+            SmartNotificationManager.NOTIFICATION_ID_PERSISTENT_BAR,
+            SmartNotificationManager.NOTIFICATION_ID_ACTIVE_TIMER,
+            SmartNotificationManager.NOTIFICATION_ID_SMART_PROMPT,
+            SmartNotificationManager.NOTIFICATION_ID_RULE_OVERRIDE,
+            SmartNotificationManager.NOTIFICATION_ID_AUTO_TRANSITION,
+          ),
+        )
+      }
+
+      val activeById = notificationManager.activeNotifications.associateBy { it.id }
+      val distinctGroups = activeById.values.map { it.notification.group }.toSet()
+      assertEquals(5, distinctGroups.size)
+
+      val quickBarNotif = activeById.getValue(SmartNotificationManager.NOTIFICATION_ID_PERSISTENT_BAR).notification
+      assertEquals(SmartNotificationManager.GROUP_QUICK_BAR, quickBarNotif.group)
+      @Suppress("DEPRECATION")
+      val compactRemoteViews = quickBarNotif.contentView
+      @Suppress("DEPRECATION")
+      val expandedRemoteViews = quickBarNotif.bigContentView
+      assertNotNull(compactRemoteViews)
+      assertNotNull(expandedRemoteViews)
+      assertNotNull(quickBarNotif.deleteIntent)
+      val quickBarTitleText = quickBarNotif.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+      assertTrue(!quickBarTitleText.contains("Timer ("))
+      assertTrue(!quickBarTitleText.contains("restantes"))
+
+      // Inflar RemoteViews recolhido da Barra Rápida e validar presença dos 3 botões em 1 toque
+      composeRule.runOnUiThread {
+        val inflatedCompact = compactRemoteViews.apply(app, FrameLayout(app))
+        assertEquals(View.VISIBLE, inflatedCompact.findViewById<View>(R.id.quick_bar_btn_sound).visibility)
+        assertEquals(View.VISIBLE, inflatedCompact.findViewById<View>(R.id.quick_bar_btn_silent).visibility)
+        assertEquals(View.VISIBLE, inflatedCompact.findViewById<View>(R.id.quick_bar_btn_vibrate).visibility)
+      }
+
+      // AC-04: Prompt Pós-Volume (3101) não possui FLAG_SILENT e Timer (3102) possui timeoutAfter > 0
+      val smartPromptNotif = activeById.getValue(SmartNotificationManager.NOTIFICATION_ID_SMART_PROMPT).notification
+      assertEquals(SmartNotificationManager.GROUP_SMART_PROMPT, smartPromptNotif.group)
+      val activeTimerNotif = activeById.getValue(SmartNotificationManager.NOTIFICATION_ID_ACTIVE_TIMER).notification
+      assertTrue(activeTimerNotif.timeoutAfter > 0L)
+
+      // AC-01: Simular swipe lateral na Barra Rápida (3104) e disparo autenticado de ACTION_RESTORE_PERSISTENT_QUICK_BAR
+      notificationManager.cancel(SmartNotificationManager.NOTIFICATION_ID_PERSISTENT_BAR)
+      composeRule.waitUntil(3_000L) {
+        notificationManager.activeNotifications.none {
+          it.id == SmartNotificationManager.NOTIFICATION_ID_PERSISTENT_BAR
+        }
+      }
+      val restoreIntent = Intent(app, SystemAutomationReceiver::class.java).apply {
+        action = SystemAutomationReceiver.ACTION_RESTORE_PERSISTENT_QUICK_BAR
+      }
+      InternalIntentSecurity.signIntent(app, restoreIntent)
+      app.sendBroadcast(restoreIntent)
+      composeRule.waitUntil(5_000L) {
+        notificationManager.activeNotifications.any {
+          it.id == SmartNotificationManager.NOTIFICATION_ID_PERSISTENT_BAR
+        }
+      }
+
+      // 3. AC-03: Pre-Silence Snapshot + Fim do Timer Zumbi na UI real
+      runBlocking {
+        app.container.preferencesDataSource.setAutomationsPaused(true)
+        app.container.soundModeRepository.setSoundState(SoundState(BaseAudioMode.SOUND, true))
+        app.container.soundModeRepository.setStreamVolume(VolumeStreamType.MEDIA, 58)
+        app.container.soundModeRepository.refreshSystemState()
+      }
+      awaitPrefs { it.automationsPaused }
+      composeRule.waitForIdle()
+
+      // Entrar em Silêncio + Vibrar pela UI e iniciar Timer de 30m JÁ estando em Silêncio
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
+      composeRule.waitUntil(5_000L) {
+        app.container.soundSystemController.readSoundState().audioMode == BaseAudioMode.SILENT
+      }
+      composeRule.waitForIdle()
+      composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).performScrollTo().performClick()
+      composeRule.waitForIdle()
+
+      val prefsTimer = awaitPrefs { it.activeTimer != null }
+      assertEquals(
+        SoundState(BaseAudioMode.SOUND, true),
+        prefsTimer.activeTimer?.resolvedPreviousSoundState,
+      )
+      assertTrue((prefsTimer.activeTimer?.previousStreams?.mediaPercent ?: 0) > 0)
+
+      // Troca manual para [Som] cancela imediatamente o Timer Zumbi e remove 3102
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SOUND_BUTTON).performClick()
+      composeRule.waitUntil(5_000L) {
+        app.container.soundSystemController.readSoundState().audioMode == BaseAudioMode.SOUND
+      }
+      composeRule.waitForIdle()
+      val prefsAfterManualSwitch = awaitPrefs { it.activeTimer == null }
+      assertNull(prefsAfterManualSwitch.activeTimer)
+      composeRule.waitUntil(3_000L) {
+        notificationManager.activeNotifications.none {
+          it.id == SmartNotificationManager.NOTIFICATION_ID_ACTIVE_TIMER
+        }
+      }
+
+      // 4. AC-05: Alternar idioma para Inglês ressincroniza os 5 canais e a Barra Rápida em EN
+      runBlocking {
+        app.container.soundModeRepository.setAppLanguageCode("EN").getOrThrow()
+      }
+      val enAutoChannel = notificationManager.getNotificationChannel(SmartNotificationManager.CHANNEL_AUTO_TRANSITION)
+      assertEquals("Automatic Routine Transition", enAutoChannel?.name?.toString())
+    } finally {
+      notificationManager.cancelAll()
+      runBlocking {
+        app.container.soundModeRepository.setAppLanguageCode("PT_BR")
+        app.container.preferencesDataSource.setAutomationsPaused(false)
         app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
       }
     }

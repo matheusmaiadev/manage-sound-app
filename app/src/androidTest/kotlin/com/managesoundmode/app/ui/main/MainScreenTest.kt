@@ -933,4 +933,75 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag(AppTestTags.Settings.WRITE_SETTINGS_PERMISSION_CARD).performClick()
     assertEquals(2, writePermissionRequestedCount)
   }
+
+  /**
+   * UC-37 (SPEC-006): Estado honesto de POST_NOTIFICATIONS no Hub e nas sub-telas de Ajustes
+   * + Snackbar visível ao clicar em "Testar notificação inteligente".
+   */
+  @Test
+  fun uc37_spec006_honestNotificationPermissionBannersAndSmartNotificationSnackbar() {
+    var hasNotifPerm by mutableStateOf(false)
+    var statusMessage by mutableStateOf<String?>(null)
+    var notifPermissionRequests = 0
+
+    composeTestRule.setContent {
+      ManageSoundModeTheme {
+        MainDashboardContent(
+          state = MainScreenUiState.Ready(
+            currentMode = SoundMode.NORMAL,
+            streams = VolumeStreams(),
+            hasDndPermission = true,
+            hasNotificationPermission = hasNotifPerm,
+            persistentQuickBarEnabled = true,
+            smartVolumeTriggerEnabled = true,
+            statusMessage = statusMessage,
+            profiles = SoundProfile.defaultPresets,
+          ),
+          onSelectMode = {},
+          onStreamVolumeChange = { _, _ -> },
+          onActivateProfile = {},
+          onStartTimer = { _, _ -> },
+          onCancelTimer = {},
+          onSaveProfile = { _, _ -> },
+          onDismissMessage = { statusMessage = null },
+          onRequestDndPermission = {},
+          onRequestNotificationPermission = {
+            notifPermissionRequests++
+            hasNotifPerm = true
+          },
+          onTestSmartNotification = {
+            statusMessage = AppLabels.Settings.testSmartNotificationSentMessage
+          },
+          onShowStatusMessage = { statusMessage = it },
+        )
+      }
+    }
+
+    // 1. Abrir Hub de Ajustes e verificar estado honesto "Permissão pendente" (sem falso positivo "Barra: Ativa")
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_SETTINGS).performClick()
+    composeTestRule.onNodeWithText("Barra: Permissão pendente", substring = true).assertIsDisplayed()
+
+    // 2. Sub-tela Atalhos no Header & Widgets exibe banner de autorização e subtítulo de pendência
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_GADGETS_WIDGETS).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.NOTIFICATION_PERMISSION_BANNER).assertIsDisplayed()
+    composeTestRule
+      .onNodeWithText(AppLabels.Settings.persistentQuickBarPendingPermissionSubtitle)
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
+
+    // 3. Sub-tela Botões de Volume, Mídia & Timer também exibe banner até conceder permissão + exibe Snackbar no teste
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_AUDIO_MEDIA).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.NOTIFICATION_PERMISSION_BANNER).assertIsDisplayed()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.AUTHORIZE_NOTIFICATION_PERMISSION_BUTTON)
+      .performClick()
+    assertEquals(1, notifPermissionRequests)
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.NOTIFICATION_PERMISSION_BANNER).assertDoesNotExist()
+
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.TEST_SMART_NOTIFICATION_BUTTON).performClick()
+    composeTestRule
+      .onNodeWithText(AppLabels.Settings.testSmartNotificationSentMessage)
+      .assertIsDisplayed()
+  }
 }

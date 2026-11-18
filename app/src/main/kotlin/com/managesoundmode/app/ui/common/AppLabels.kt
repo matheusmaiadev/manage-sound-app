@@ -582,6 +582,31 @@ object AppLabels {
       )
     val testSmartNotificationButton: String
       get() = tr("Testar notificação inteligente", "Test smart notification")
+    val testSmartNotificationSentMessage: String
+      get() = tr(
+        "Sugestão pós-volume enviada! Confira o alerta no topo da tela.",
+        "Post-volume prompt sent! Check the heads-up alert at the top.",
+      )
+    val notificationPermissionBannerTitle: String
+      get() = tr(
+        "Permissão de Notificações Pendente",
+        "Notification Permission Pending",
+      )
+    val notificationPermissionBannerSubtitle: String
+      get() = tr(
+        "Autorize notificações no Android para exibir a Barra Rápida 1-Toque, o Cronômetro e a Sugestão Pós-Volume.",
+        "Allow Android notifications to display the 1-Tap Quick Bar, Timer and Post-Volume Prompt.",
+      )
+    val notificationPermissionRequiredMessage: String
+      get() = tr(
+        "Autorize a permissão de notificações para exibir alertas na gaveta.",
+        "Allow notification permission to display alerts in the drawer.",
+      )
+    val persistentQuickBarPendingPermissionSubtitle: String
+      get() = tr(
+        "Permissão pendente • Toque em Autorizar acima para exibir a barra 1-toque na gaveta",
+        "Permission pending • Tap Authorize above to show the 1-tap bar in the drawer",
+      )
     val muteMediaOnSilentTitle: String
       get() = tr("Zerar Mídia ao Silenciar", "Mute Media When Silencing")
     val muteMediaOnSilentSubtitle: String
@@ -839,17 +864,46 @@ object AppLabels {
         tr("Retorno: $policyTitle ($defaultProfileName)", "Return: $policyTitle ($defaultProfileName)")
       }
 
-    fun audioMediaSummary(muteMedia: Boolean, preserveBt: Boolean, defaultTimerMinutes: Int): String =
-      tr(
-        "Zerar mídia: ${if (muteMedia) "Sim" else "Não"} • BT: ${if (preserveBt) "Protegido" else "Normal"} • Timer ${defaultTimerMinutes}m",
-        "Mute media: ${if (muteMedia) "On" else "Off"} • BT: ${if (preserveBt) "Protected" else "Normal"} • Timer ${defaultTimerMinutes}m",
-      )
+    fun audioMediaSummary(
+      muteMedia: Boolean,
+      preserveBt: Boolean,
+      defaultTimerMinutes: Int,
+      smartTriggerEnabled: Boolean = false,
+      hasNotificationPermission: Boolean = true,
+    ): String =
+      if (smartTriggerEnabled && !hasNotificationPermission) {
+        tr(
+          "Permissão pendente • Zerar mídia: ${if (muteMedia) "Sim" else "Não"} • Timer ${defaultTimerMinutes}m",
+          "Permission pending • Mute media: ${if (muteMedia) "On" else "Off"} • Timer ${defaultTimerMinutes}m",
+        )
+      } else {
+        tr(
+          "Zerar mídia: ${if (muteMedia) "Sim" else "Não"} • BT: ${if (preserveBt) "Protegido" else "Normal"} • Timer ${defaultTimerMinutes}m",
+          "Mute media: ${if (muteMedia) "On" else "Off"} • BT: ${if (preserveBt) "Protected" else "Normal"} • Timer ${defaultTimerMinutes}m",
+        )
+      }
 
-    fun gadgetsSummary(quickBarEnabled: Boolean, slot1Name: String, slot2Name: String): String =
-      tr(
-        "Barra: ${if (quickBarEnabled) "Ativa" else "Inativa"} • Favoritos: $slot1Name, $slot2Name",
-        "Bar: ${if (quickBarEnabled) "Active" else "Off"} • Favorites: $slot1Name, $slot2Name",
+    fun gadgetsSummary(
+      quickBarEnabled: Boolean,
+      slot1Name: String,
+      slot2Name: String,
+      hasNotificationPermission: Boolean = true,
+    ): String {
+      val barStatusPt = when {
+        !quickBarEnabled -> "Inativa"
+        !hasNotificationPermission -> "Permissão pendente"
+        else -> "Ativa"
+      }
+      val barStatusEn = when {
+        !quickBarEnabled -> "Off"
+        !hasNotificationPermission -> "Permission pending"
+        else -> "Active"
+      }
+      return tr(
+        "Barra: $barStatusPt • Favoritos: $slot1Name, $slot2Name",
+        "Bar: $barStatusEn • Favorites: $slot1Name, $slot2Name",
       )
+    }
 
     fun permissionsSummary(grantedCount: Int, totalCount: Int): String =
       tr(
@@ -1186,8 +1240,8 @@ object AppLabels {
       get() = tr("Sugestão de Timer ao Silenciar", "Timer Suggestion When Silencing")
     val promptChannelDescription: String
       get() = tr(
-        "Pergunta se você deseja restaurar o som automaticamente ao silenciar pelo botão de volume",
-        "Asks whether to restore sound automatically when silencing via volume button",
+        "Pergunta em pop-up silencioso se você deseja restaurar o som ao silenciar pelo botão de volume",
+        "Asks via silent heads-up prompt whether to restore sound when silencing via volume button",
       )
     val timerChannelName: String
       get() = tr("Timer de Restauração Ativo", "Active Auto-Restore Timer")
@@ -1207,22 +1261,55 @@ object AppLabels {
       get() = tr("Gadget de Controle Rápido no Header", "Header Quick Control Gadget")
     val quickBarChannelDescription: String
       get() = tr(
-        "Barra rápida persistente nas notificações para controlar Som, Silêncio e Vibrar em 1 toque",
-        "Persistent quick bar in notifications to control Sound, Silent and Vibrate in 1 tap",
+        "Barra rápida persistente em 1 toque nas notificações para controlar Som, Silêncio e Vibrar",
+        "Persistent 1-tap quick bar in notifications to control Sound, Silent and Vibrate",
       )
+    val autoTransitionChannelName: String
+      get() = tr("Transição de Rotina Automática", "Automatic Routine Transition")
+    val autoTransitionChannelDescription: String
+      get() = tr(
+        "Exibe aviso discreto e silencioso quando um horário ou local ativa ou encerra uma rotina",
+        "Shows a discreet silent alert when a schedule or location starts or ends a routine",
+      )
+
+    fun quickBarCompactTitle(
+      state: SoundState,
+      activeProfileName: String?,
+    ): String = if (!activeProfileName.isNullOrBlank()) {
+      "${state.title} • $activeProfileName"
+    } else {
+      state.title
+    }
 
     fun quickBarTitle(
       state: SoundState,
-      remainingMin: Int?,
       activeProfileName: String?,
-    ): String = when {
-      remainingMin != null ->
-        tr("${state.title} • Timer (${remainingMin}m restantes)", "${state.title} • Timer (${remainingMin}m left)")
-      !activeProfileName.isNullOrBlank() ->
-        tr("${state.title} • Perfil $activeProfileName", "${state.title} • Profile $activeProfileName")
-      else ->
-        tr("Estado Atual: ${state.title}", "Current State: ${state.title}")
+    ): String = if (!activeProfileName.isNullOrBlank()) {
+      tr("${state.title} • Perfil $activeProfileName", "${state.title} • Profile $activeProfileName")
+    } else {
+      tr("Estado Atual: ${state.title}", "Current State: ${state.title}")
     }
+
+    fun quickBarCompactSubtitle(state: SoundState, streams: VolumeStreams): String =
+      when (state.audioMode) {
+        BaseAudioMode.SOUND ->
+          tr(
+            "Toque ${streams.ringPercent}% • Mídia ${streams.mediaPercent}%",
+            "Ring ${streams.ringPercent}% • Media ${streams.mediaPercent}%",
+          )
+        BaseAudioMode.SILENT ->
+          if (state.vibrateEnabled) {
+            tr(
+              "Vibrar ON • Mídia ${streams.mediaPercent}%",
+              "Vibrate ON • Media ${streams.mediaPercent}%",
+            )
+          } else {
+            tr(
+              "Silêncio total • Alarme ${streams.alarmPercent}%",
+              "Total silence • Alarm ${streams.alarmPercent}%",
+            )
+          }
+      }
 
     fun quickBarSubtitle(state: SoundState, streams: VolumeStreams): String =
       when (state.audioMode) {
@@ -1245,14 +1332,28 @@ object AppLabels {
           }
       }
 
-    fun quickBarSoundAction(isActive: Boolean): String =
-      if (isActive) tr("[Som]", "[Sound]") else tr("Som", "Sound")
+    val quickBarSoundPillLabel: String get() = tr("Som", "Sound")
+    val quickBarSilentPillLabel: String get() = tr("Silêncio", "Silent")
 
-    fun quickBarSilentAction(isActive: Boolean): String =
-      if (isActive) tr("[Silêncio]", "[Silent]") else tr("Silêncio", "Silent")
+    fun quickBarVibratePillLabel(vibrateEnabled: Boolean): String =
+      if (vibrateEnabled) tr("Vibrar", "Vibrate") else tr("Sem vibrar", "No vibrate")
 
-    fun quickBarVibrateAction(vibrateEnabled: Boolean): String =
-      if (vibrateEnabled) tr("Vibrar: ON", "Vibrate: ON") else tr("Vibrar: OFF", "Vibrate: OFF")
+    fun quickBarSoundContentDesc(isActive: Boolean): String =
+      if (isActive) tr("Som ativo", "Sound active") else tr("Ativar Som", "Enable Sound")
+
+    fun quickBarSilentContentDesc(isActive: Boolean, needsDnd: Boolean): String =
+      when {
+        needsDnd -> tr("Autorizar Não Perturbe para Silêncio", "Authorize Do Not Disturb for Silent")
+        isActive -> tr("Silêncio ativo", "Silent active")
+        else -> tr("Ativar Silêncio", "Enable Silent")
+      }
+
+    fun quickBarVibrateContentDesc(vibrateEnabled: Boolean, needsDnd: Boolean): String =
+      when {
+        needsDnd -> tr("Autorizar Não Perturbe para Silêncio Total", "Authorize Do Not Disturb for Total Silence")
+        vibrateEnabled -> tr("Vibrar ativado • Toque para desligar", "Vibrate on • Tap to disable")
+        else -> tr("Vibrar desativado • Toque para ligar", "Vibrate off • Tap to enable")
+      }
 
     fun smartPromptTitle(stateTitle: String): String =
       tr("$stateTitle ativado", "$stateTitle enabled")
@@ -1282,6 +1383,33 @@ object AppLabels {
 
     val ruleOverrideSubtitle: String
       get() = tr("Você alterou o som pelos botões físicos.", "You changed sound via hardware buttons.")
+
+    fun autoRoutineActivatedTitle(ruleName: String): String =
+      tr("Rotina '$ruleName' iniciada", "Routine '$ruleName' started")
+
+    fun autoRoutineActivatedSubtitle(profileName: String, stateTitle: String): String =
+      tr("Perfil $profileName aplicado ($stateTitle)", "Profile $profileName applied ($stateTitle)")
+
+    val autoRoutineEndedTitle: String
+      get() = tr("Rotina automática encerrada", "Automatic routine ended")
+
+    fun autoRoutineRestoredSnapshotSubtitle(stateTitle: String): String =
+      tr("Estado anterior restaurado ($stateTitle)", "Previous state restored ($stateTitle)")
+
+    fun autoRoutineRestoredProfileSubtitle(profileName: String, stateTitle: String): String =
+      tr("Retornou para o perfil $profileName ($stateTitle)", "Returned to profile $profileName ($stateTitle)")
+
+    val dndRequiredAlertTitle: String
+      get() = tr("Permissão Não Perturbe necessária", "Do Not Disturb permission required")
+
+    val dndRequiredAlertSubtitle: String
+      get() = tr(
+        "Toque para autorizar o Não Perturbe e ativar o Silêncio Total.",
+        "Tap to authorize Do Not Disturb and enable Total Silence.",
+      )
+
+    val actionOpenDndSettings: String
+      get() = tr("Autorizar DND", "Authorize DND")
   }
 
   object Widget {

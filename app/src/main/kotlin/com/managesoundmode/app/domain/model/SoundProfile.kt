@@ -47,6 +47,24 @@ data class SoundProfile(
   companion object {
     const val DEFAULT_DAY_PROFILE_ID = "preset_default_day"
 
+    /**
+     * Combina perfis predefinidos e customizados priorizando edições salvas em [savedProfiles]
+     * sobre [defaultPresets], garantindo consistência em UI, Repositório e Barra Rápida.
+     */
+    fun mergeProfiles(
+      savedProfiles: List<SoundProfile>,
+      deletedIds: Set<String> = emptySet(),
+    ): List<SoundProfile> {
+      val savedById = savedProfiles.map { it.normalized() }.associateBy { it.id }
+      val presetIds = defaultPresets.map { it.id }.toSet()
+      val resolvedPresets = defaultPresets.map { preset ->
+        savedById[preset.id]?.copy(isPreset = true) ?: preset
+      }
+      val extraCustom = savedProfiles.map { it.normalized() }.filterNot { it.id in presetIds }
+      val merged = (resolvedPresets + extraCustom).filterNot { it.id in deletedIds }
+      return merged.ifEmpty { listOf(defaultPresets.first()) }
+    }
+
     val defaultPresets: List<SoundProfile> = listOf(
       SoundProfile(
         id = DEFAULT_DAY_PROFILE_ID,

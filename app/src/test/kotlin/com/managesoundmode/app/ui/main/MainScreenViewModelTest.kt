@@ -449,6 +449,12 @@ class MainScreenViewModelTest {
       assertEquals("location_card_loc_office", AppTestTags.Locations.card("loc_office"))
       assertEquals("language_button_EN", AppTestTags.Settings.languageButton(AppLanguage.EN))
       assertEquals("topbar_overflow_menu_button", AppTestTags.TopBar.OVERFLOW_MENU_BUTTON)
+      assertEquals(SoundState(BaseAudioMode.SOUND, true), SoundState(BaseAudioMode.SOUND, true))
+      assertEquals("settings_notification_permission_banner", AppTestTags.Settings.NOTIFICATION_PERMISSION_BANNER)
+      assertEquals(
+        "settings_authorize_notification_permission_button",
+        AppTestTags.Settings.AUTHORIZE_NOTIFICATION_PERMISSION_BUTTON,
+      )
       assertEquals("settings_category_appearance", AppTestTags.Settings.CATEGORY_APPEARANCE)
     } finally {
       AppLabels.currentLanguage = AppLanguage.PT_BR
@@ -989,6 +995,201 @@ class MainScreenViewModelTest {
     assertEquals(SoundState(BaseAudioMode.SILENT, true), pVibrate.resolvedSoundState)
     assertEquals(SoundState(BaseAudioMode.SILENT, false), pSilent.resolvedSoundState)
   }
+
+  @Test
+  fun spec006_preSilenceSnapshot_timerFromSilentRestoresRealActiveSoundAndPreMuteMedia() = runTest {
+    fakePreferences.clearSchedules()
+    val smartPrompts = mutableListOf<Pair<SoundMode, Boolean>>()
+    val scheduledExactAlarmTimes = mutableListOf<Long>()
+    var cancelledExactAlarmCount = 0
+
+    val repoS3 = DefaultSoundModeRepository(
+      systemController = fakeSystemController,
+      preferencesDataSource = fakePreferences,
+      onScheduleExactTimerAlarm = { endsAt -> scheduledExactAlarmTimes.add(endsAt) },
+      onCancelExactTimerAlarm = { cancelledExactAlarmCount++ },
+      onSmartRestorePrompt = { mode, autoMuted -> smartPrompts.add(mode to autoMuted) },
+      clockNowMillis = { 1_800_000_000_000L },
+    )
+    val vm = MainScreenViewModel(repoS3)
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      vm.uiState.collect()
+    }
+
+    // 1. Configure Som + Vibrar with Ring 74% and Media 62%
+    vm.onStreamVolumeChange(VolumeStreamType.RING, 74)
+    vm.onStreamVolumeChange(VolumeStreamType.MEDIA, 62)
+    assertEquals(SoundState(BaseAudioMode.SOUND, true), (vm.uiState.value as MainScreenUiState.Ready).currentSoundState)
+
+    // 2. Simulate hardware Volume Down silencing to Vibrate (Android zeroes STREAM_RING in RINGER_MODE_VIBRATE)
+    fakeSystemController.soundState = SoundState(BaseAudioMode.SILENT, true)
+    fakeSystemController.streams = fakeSystemController.streams.copy(ringPercent = 0, notificationPercent = 0)
+    fakeSystemController.externalFlag = true
+    repoS3.handleExternalAudioChange()
+
+    assertEquals(listOf(SoundMode.VIBRATE to true), smartPrompts)
+    assertEquals(0, fakeSystemController.streams.mediaPercent)
+
+    // 3. Simulate hardware toggle Vibrar -> Silêncio Total while already in Silent -> updates prompt 3101
+    fakeSystemController.soundState = SoundState(BaseAudioMode.SILENT, false)
+    fakeSystemController.externalFlag = true
+    repoS3.handleExternalAudioChange()
+    assertEquals(SoundMode.SILENT to true, smartPrompts.last())
+
+    // 4. Start 30m timer while ALREADY in Silêncio Total -> must resolve return target to Som + Vibrar (Ring 74%, Media 62%)
+    val session = repoS3.startTimedStateSession(
+      targetState = SoundState(BaseAudioMode.SILENT, false),
+      durationMinutes = 30,
+      nowEpochMillis = 1_800_000_000_000L,
+    ).getOrThrow()
+
+    assertEquals(SoundState(BaseAudioMode.SOUND, true), session.resolvedPreviousSoundState)
+    assertEquals(74, session.previousStreams.ringPercent)
+    assertEquals(62, session.previousStreams.mediaPercent)
+    assertEquals(listOf(1_800_000_000_000L + 30 * 60_000L), scheduledExactAlarmTimes)
+
+    // 5. Extend timer by +30m -> reschedules exact alarm
+    val extended = repoS3.extendTimedSession(
+      additionalMinutes = 30,
+      nowEpochMillis = 1_800_000_000_000L,
+    ).getOrThrow()
+    assertEquals(1_800_000_000_000L + 60 * 60_000L, extended.endsAtEpochMillis)
+    assertEquals(extended.endsAtEpochMillis, scheduledExactAlarmTimes.last())
+
+    // 6. Exact alarm expires -> restores Som + Vibrar, Ring 74% & Media 62%; second call (worker safety net) is idempotent
+    repoS3.cancelOrRestoreTimedSession().getOrThrow()
+    assertEquals(SoundState(BaseAudioMode.SOUND, true), fakeSystemController.soundState)
+    assertEquals(74, fakeSystemController.streams.ringPercent)
+    assertEquals(62, fakeSystemController.streams.mediaPercent)
+    assertTrue(cancelledExactAlarmCount >= 1)
+
+    // Modify media after restoration and ensure redundant worker execution does NOT overwrite user's state
+    vm.onStreamVolumeChange(VolumeStreamType.MEDIA, 33)
+    repoS3.cancelOrRestoreTimedSession().getOrThrow()
+    assertEquals(33, fakeSystemController.streams.mediaPercent)
+  }
+
+  @Test
+  fun spec006_zombieTimerElimination_manualModeAndProfileSwitchesCancelActiveTimerImmediately() = runTest {
+    fakePreferences.clearSchedules()
+    var cancelWorkerCount = 0
+    var cancelExactAlarmCount = 0
+    val syncedTimerSessions = mutableListOf<TimedModeSession?>()
+
+    val repoS3 = DefaultSoundModeRepository(
+      systemController = fakeSystemController,
+      preferencesDataSource = fakePreferences,
+      onCancelAutoRestore = { cancelWorkerCount++ },
+      onCancelExactTimerAlarm = { cancelExactAlarmCount++ },
+      onSyncActiveTimerNotification = { session -> syncedTimerSessions.add(session) },
+    )
+    val vm = MainScreenViewModel(repoS3)
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      vm.uiState.collect()
+    }
+
+    // 1. Start 60m Silent timer -> manually switch audio mode to SOUND -> cancels activeTimer immediately
+    vm.onStartStateTimer(SoundState(BaseAudioMode.SILENT, true), 60)
+    assertNotNull((vm.uiState.value as MainScreenUiState.Ready).activeTimer)
+
+    vm.onSelectAudioMode(BaseAudioMode.SOUND)
+    val afterManualSound = vm.uiState.value as MainScreenUiState.Ready
+    assertNull(afterManualSound.activeTimer)
+    assertEquals(1, cancelWorkerCount)
+    assertEquals(1, cancelExactAlarmCount)
+    assertNull(syncedTimerSessions.last())
+
+    // 2. Start 60m Silent timer -> manually activate a profile -> cancels activeTimer immediately
+    vm.onStartStateTimer(SoundState(BaseAudioMode.SILENT, true), 60)
+    assertNotNull((vm.uiState.value as MainScreenUiState.Ready).activeTimer)
+
+    val homeProfile = afterManualSound.profiles.first { it.id == "preset_home" }
+    vm.onActivateProfile(homeProfile)
+    val afterProfile = vm.uiState.value as MainScreenUiState.Ready
+    assertNull(afterProfile.activeTimer)
+    assertEquals(2, cancelWorkerCount)
+    assertEquals(2, cancelExactAlarmCount)
+    assertNull(syncedTimerSessions.last())
+
+    // 3. SoundProfile.mergeProfiles prioritizes edited preset names in customProfiles over defaultPresets
+    val workPreset = afterProfile.profiles.first { it.id == "preset_work_high" }
+    val renamedWork = workPreset.copy(name = "Trabalho Executivo")
+    val merged = SoundProfile.mergeProfiles(savedProfiles = listOf(renamedWork))
+    assertEquals("Trabalho Executivo", merged.first { it.id == "preset_work_high" }.name)
+  }
+
+  @Test
+  fun spec006_autoRoutineTransition5thChannel_andBilingualLabelsAndLanguageResync() = runTest {
+    try {
+      fakePreferences.clearSchedules()
+      val autoTransitions = mutableListOf<Triple<String, String, SoundState>>()
+      var languageChangedCount = 0
+      var surfaceRefreshCount = 0
+
+      val repoS3 = DefaultSoundModeRepository(
+        systemController = fakeSystemController,
+        preferencesDataSource = fakePreferences,
+        onAutoRoutineTransitionAlert = { title, subtitle, state ->
+          autoTransitions.add(Triple(title, subtitle, state))
+        },
+        onLanguageChanged = { languageChangedCount++ },
+        onRefreshExternalSurfaces = { surfaceRefreshCount++ },
+      )
+      val vm = MainScreenViewModel(repoS3)
+      backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+        vm.uiState.collect()
+      }
+
+      // 1. With notifyOnAutoTransition = true, entering and leaving a Location routine emits 5th-channel alerts
+      val collegeRule = LocationRule.defaultLocations.first { it.id == "loc_college" }
+      vm.onToggleLocationRule(collegeRule, enabled = true)
+      vm.onToggleLocationPresence("loc_college", inside = true)
+      assertEquals(1, autoTransitions.size)
+      assertTrue(autoTransitions.last().first.contains("Faculdade"))
+      assertEquals(SoundState(BaseAudioMode.SILENT, true), autoTransitions.last().third)
+
+      vm.onToggleLocationPresence("loc_college", inside = false)
+      assertEquals(2, autoTransitions.size)
+      assertEquals(AppLabels.Notifications.autoRoutineEndedTitle, autoTransitions.last().first)
+
+      // 2. With notifyOnAutoTransition = false, automatic routines do NOT emit 5th-channel alerts
+      vm.onSetNotifyOnAutoTransition(false)
+      vm.onToggleLocationPresence("loc_college", inside = true)
+      assertEquals(2, autoTransitions.size)
+
+      // 3. Language switch re-syncs channels & surfaces and exposes 100% bilingual labels without frozen timer minutes
+      vm.onSetAppLanguage(AppLanguage.EN)
+      assertEquals(1, languageChangedCount)
+      assertTrue(surfaceRefreshCount >= 1)
+      assertEquals("Automatic Routine Transition", AppLabels.Notifications.autoTransitionChannelName)
+      val quickBarTitleEn = AppLabels.Notifications.quickBarTitle(
+        state = SoundState(BaseAudioMode.SILENT, true),
+        activeProfileName = "Work",
+      )
+      assertEquals("Silent + Vibrate • Profile Work", quickBarTitleEn)
+      assertTrue(!quickBarTitleEn.contains("Timer ("))
+      assertTrue(
+        AppLabels.Settings.gadgetsSummary(
+          quickBarEnabled = true,
+          slot1Name = "Work",
+          slot2Name = "Sleep",
+          hasNotificationPermission = false,
+        ).contains("Permission pending"),
+      )
+
+      vm.onSetAppLanguage(AppLanguage.PT_BR)
+      assertTrue(
+        AppLabels.Settings.gadgetsSummary(
+          quickBarEnabled = true,
+          slot1Name = "Trabalho",
+          slot2Name = "Dormir",
+          hasNotificationPermission = false,
+        ).contains("Permissão pendente"),
+      )
+    } finally {
+      AppLabels.currentLanguage = AppLanguage.PT_BR
+    }
+  }
 }
 
 private class FakeSoundSystemController : SoundSystemController {
@@ -1127,6 +1328,10 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
 
   override suspend fun setSavedSnapshot(snapshot: SavedStateSnapshot?) {
     state.value = state.value.copy(savedSnapshot = snapshot)
+  }
+
+  override suspend fun setLastActiveSoundSnapshot(snapshot: SavedStateSnapshot?) {
+    state.value = state.value.copy(lastActiveSoundSnapshot = snapshot)
   }
 
   override suspend fun setLastAppliedRuleSessionKey(sessionKey: String?) {

@@ -69,6 +69,8 @@
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
                 <action android:name="android.app.action.AUTOMATIC_ZEN_RULE_STATUS_CHANGED" />
                 <action android:name="com.managesoundmode.app.action.EVALUATE_RULES_ALARM" />
+                <action android:name="com.managesoundmode.app.action.TIMER_EXPIRED_ALARM" />
+                <action android:name="com.managesoundmode.app.action.RESTORE_PERSISTENT_QUICK_BAR" />
                 <action android:name="com.managesoundmode.app.action.GEOFENCE_TRANSITION" />
                 <action android:name="com.managesoundmode.app.action.PASSIVE_LOCATION_UPDATE" />
                 <action android:name="com.managesoundmode.app.action.GEOFENCE_DWELL_CHECK" />

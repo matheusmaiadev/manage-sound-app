@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Zenith Light Mode (Alvorada Nórdica) — Notification Quick Bar -->
+    <color name="notif_text_primary">#FF0F172A</color>
+    <color name="notif_text_secondary">#FF475569</color>
+    <color name="notif_capsule_track">#FFE2E8F0</color>
+    <color name="notif_capsule_stroke">#FFCBD5E1</color>
+    <color name="notif_pill_inactive_bg">#FFF1F5F9</color>
+    <color name="notif_pill_inactive_fg">#FF334155</color>
+    <color name="notif_sound_active_bg">#FF0F766E</color>
+    <color name="notif_sound_active_fg">#FFFFFFFF</color>
+    <color name="notif_silent_active_bg">#FF6D28D9</color>
+    <color name="notif_silent_active_fg">#FFFFFFFF</color>
+    <color name="notif_vibrate_active_bg">#FFB45309</color>
+    <color name="notif_vibrate_active_fg">#FFFFFFFF</color>
+</resources>

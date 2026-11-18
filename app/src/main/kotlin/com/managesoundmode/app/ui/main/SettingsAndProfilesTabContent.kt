@@ -76,14 +76,18 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -151,6 +155,7 @@ internal fun SettingsAndProfilesTabContent(
   onRequestExactAlarmPermission: () -> Unit,
   onRequestNotificationPermission: () -> Unit,
   onClearLogs: () -> Unit,
+  onDismissMessage: () -> Unit = {},
   onRequestWriteSettingsPermission: () -> Unit = {},
   onSetPersistentQuickBarEnabled: (Boolean) -> Unit = {},
   onRequestAddQuickTile: (QuickTileKind, String?) -> Unit = { _, _ -> },
@@ -250,6 +255,7 @@ internal fun SettingsAndProfilesTabContent(
       onRequestExactAlarmPermission = onRequestExactAlarmPermission,
       onRequestNotificationPermission = onRequestNotificationPermission,
       onClearLogs = onClearLogs,
+      onDismissMessage = onDismissMessage,
       onRequestFactoryResetConfirm = {
         if (!state.accessControlConfig.hasPermission(AppPermission.BACKUP_AND_FACTORY_RESET)) {
           onShowStatusMessage(
@@ -334,9 +340,12 @@ internal fun SettingsAndProfilesTabContent(
           muteMedia = state.muteMediaOnSilent,
           preserveBt = state.preserveMediaOnBluetooth,
           defaultTimerMinutes = state.defaultTimerMinutes,
+          smartTriggerEnabled = state.smartVolumeTriggerEnabled,
+          hasNotificationPermission = state.hasNotificationPermission,
         ),
         shape = RoundedCornerShape(22.dp),
         testTag = AppTestTags.Settings.CATEGORY_AUDIO_MEDIA,
+        hasWarningBadge = state.smartVolumeTriggerEnabled && !state.hasNotificationPermission,
         onClick = { openCategory = SettingsCategory.AUDIO_MEDIA },
       )
     }
@@ -349,9 +358,11 @@ internal fun SettingsAndProfilesTabContent(
           quickBarEnabled = state.persistentQuickBarEnabled,
           slot1Name = slot1Profile?.name ?: "-",
           slot2Name = slot2Profile?.name ?: "-",
+          hasNotificationPermission = state.hasNotificationPermission,
         ),
         shape = RoundedCornerShape(22.dp),
         testTag = AppTestTags.Settings.CATEGORY_GADGETS_WIDGETS,
+        hasWarningBadge = state.persistentQuickBarEnabled && !state.hasNotificationPermission,
         onClick = { openCategory = SettingsCategory.GADGETS_WIDGETS },
       )
     }
@@ -692,6 +703,7 @@ internal fun SettingsCategoryFullScreenDialog(
   onRequestExactAlarmPermission: () -> Unit = {},
   onRequestNotificationPermission: () -> Unit = {},
   onClearLogs: () -> Unit = {},
+  onDismissMessage: () -> Unit = {},
   onRequestFactoryResetConfirm: () -> Unit = {},
   onExportBackupJson: ((String) -> Unit) -> Unit = {},
   onImportBackupJson: (String) -> Unit = {},
@@ -705,6 +717,18 @@ internal fun SettingsCategoryFullScreenDialog(
   onSyncSystemZenRulesNow: () -> Unit = {},
 ) {
   val context = LocalContext.current
+  val subScreenSnackbarHostState = remember { SnackbarHostState() }
+
+  val currentStatusMessage = state.statusMessage
+  if (currentStatusMessage != null) {
+    LaunchedEffect(currentStatusMessage) {
+      try {
+        subScreenSnackbarHostState.showSnackbar(currentStatusMessage)
+      } finally {
+        onDismissMessage()
+      }
+    }
+  }
   val title = when (category) {
     SettingsCategory.APPEARANCE -> AppLabels.Settings.categoryAppearanceTitle
     SettingsCategory.AUTOMATION -> AppLabels.Settings.categoryAutomationTitle
@@ -728,6 +752,11 @@ internal fun SettingsCategoryFullScreenDialog(
     Scaffold(
       modifier = Modifier.fillMaxSize(),
       containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+      snackbarHost = {
+        if (state.statusMessage != null) {
+          SnackbarHost(hostState = subScreenSnackbarHostState)
+        }
+      },
       topBar = {
         TopAppBar(
           navigationIcon = {
@@ -799,6 +828,7 @@ internal fun SettingsCategoryFullScreenDialog(
             onSetMuteMediaOnSilent = onSetMuteMediaOnSilent,
             onSetPreserveMediaOnBluetooth = onSetPreserveMediaOnBluetooth,
             onSetDefaultTimerMinutes = onSetDefaultTimerMinutes,
+            onRequestNotificationPermission = onRequestNotificationPermission,
             modifier = Modifier.padding(innerPadding),
           )
         }
@@ -810,6 +840,7 @@ internal fun SettingsCategoryFullScreenDialog(
             onRequestAddQuickTile = onRequestAddQuickTile,
             onSetQuickTileSlotProfileId = onSetQuickTileSlotProfileId,
             onPinHomeWidget = onPinHomeWidget,
+            onRequestNotificationPermission = onRequestNotificationPermission,
             modifier = Modifier.padding(innerPadding),
           )
         }
@@ -1592,6 +1623,7 @@ private fun AudioAndTimerSettingsSubScreen(
   onSetMuteMediaOnSilent: (Boolean) -> Unit,
   onSetPreserveMediaOnBluetooth: (Boolean) -> Unit,
   onSetDefaultTimerMinutes: (Int) -> Unit,
+  onRequestNotificationPermission: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val timerOptions = listOf(15, 30, 60, 120)
@@ -1603,6 +1635,12 @@ private fun AudioAndTimerSettingsSubScreen(
       .padding(horizontal = 20.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(3.dp),
   ) {
+    if (!state.hasNotificationPermission) {
+      NotificationPermissionBannerCard(
+        onAuthorizeClick = onRequestNotificationPermission,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+    }
     // 1. Sugerir Timer ao Silenciar
     Card(
       modifier = Modifier.fillMaxWidth(),
@@ -1818,6 +1856,7 @@ private fun GadgetsAndWidgetsSubScreen(
   onRequestAddQuickTile: (QuickTileKind, String?) -> Unit,
   onSetQuickTileSlotProfileId: (Int, String) -> Unit,
   onPinHomeWidget: () -> Unit,
+  onRequestNotificationPermission: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val slot1Profile = state.profiles.firstOrNull { it.id == state.quickTileSlot1ProfileId }
@@ -1833,6 +1872,13 @@ private fun GadgetsAndWidgetsSubScreen(
       .padding(horizontal = 20.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(3.dp),
   ) {
+    if (!state.hasNotificationPermission) {
+      NotificationPermissionBannerCard(
+        onAuthorizeClick = onRequestNotificationPermission,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+    }
+
     // 1. Barra Rápida Persistente na Gaveta de Notificações
     Card(
       modifier = Modifier
@@ -1854,9 +1900,17 @@ private fun GadgetsAndWidgetsSubScreen(
           horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
           Icon(
-            imageVector = Icons.Default.NotificationsActive,
+            imageVector = if (state.persistentQuickBarEnabled && !state.hasNotificationPermission) {
+              Icons.Default.WarningAmber
+            } else {
+              Icons.Default.NotificationsActive
+            },
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = if (state.persistentQuickBarEnabled && !state.hasNotificationPermission) {
+              MaterialTheme.colorScheme.error
+            } else {
+              MaterialTheme.colorScheme.primary
+            },
           )
           Column {
             Text(
@@ -1865,9 +1919,17 @@ private fun GadgetsAndWidgetsSubScreen(
               fontWeight = FontWeight.Medium,
             )
             Text(
-              text = AppLabels.Settings.persistentQuickBarSubtitle,
+              text = if (state.persistentQuickBarEnabled && !state.hasNotificationPermission) {
+                AppLabels.Settings.persistentQuickBarPendingPermissionSubtitle
+              } else {
+                AppLabels.Settings.persistentQuickBarSubtitle
+              },
               style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              color = if (state.persistentQuickBarEnabled && !state.hasNotificationPermission) {
+                MaterialTheme.colorScheme.error
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
             )
           }
         }
@@ -2636,6 +2698,70 @@ private fun AboutAndPrivacySubScreen(
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+      }
+    }
+  }
+}
+
+@Composable
+private fun NotificationPermissionBannerCard(
+  onAuthorizeClick: () -> Unit,
+) {
+  Card(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag(AppTestTags.Settings.NOTIFICATION_PERMISSION_BANNER),
+    shape = RoundedCornerShape(22.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.78f),
+    ),
+    border = BorderStroke(
+      width = 1.dp,
+      color = MaterialTheme.colorScheme.error.copy(alpha = 0.45f),
+    ),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Default.WarningAmber,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.error,
+          modifier = Modifier.size(22.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = AppLabels.Settings.notificationPermissionBannerTitle,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+          )
+          Text(
+            text = AppLabels.Settings.notificationPermissionBannerSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.9f),
+          )
+        }
+      }
+      Button(
+        onClick = onAuthorizeClick,
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = MaterialTheme.colorScheme.error,
+          contentColor = MaterialTheme.colorScheme.onError,
+        ),
+        modifier = Modifier
+          .align(Alignment.End)
+          .testTag(AppTestTags.Settings.AUTHORIZE_NOTIFICATION_PERMISSION_BUTTON),
+      ) {
+        Text(AppLabels.Common.authorize)
       }
     }
   }

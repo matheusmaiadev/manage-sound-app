@@ -183,6 +183,8 @@ object AppTestTags {
     fun historyFilterChip(filterName: String): String = "settings_history_filter_$filterName"
     const val REOPEN_ONBOARDING_BUTTON = "settings_reopen_onboarding_button"
     const val WRITE_SETTINGS_PERMISSION_CARD = "settings_write_settings_permission_card"
+    const val NOTIFICATION_PERMISSION_BANNER = "settings_notification_permission_banner"
+    const val AUTHORIZE_NOTIFICATION_PERMISSION_BUTTON = "settings_authorize_notification_permission_button"
     const val SYSTEM_ZEN_RULES_SWITCH = "settings_system_zen_rules_switch"
     const val SYNC_ZEN_RULES_BUTTON = "settings_sync_zen_rules_button"
   }

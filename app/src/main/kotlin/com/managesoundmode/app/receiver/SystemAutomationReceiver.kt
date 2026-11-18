@@ -8,8 +8,10 @@ import android.content.Intent
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import com.managesoundmode.app.ManageSoundApplication
+import com.managesoundmode.app.data.system.DndPermissionRequiredException
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.SoundMode
@@ -17,6 +19,7 @@ import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.system.InternalIntentSecurity
 import com.managesoundmode.app.system.LocationProximityHelper
+import com.managesoundmode.app.system.SmartNotificationManager
 import com.managesoundmode.app.system.SystemZenRuleManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +52,17 @@ class SystemAutomationReceiver : BroadcastReceiver() {
         when (action) {
           ACTION_EVALUATE_RULES_ALARM -> {
             repo.evaluateAndApplyRules(source = TransitionTriggerSource.SCHEDULE)
+          }
+
+          ACTION_TIMER_EXPIRED_ALARM -> {
+            repo.cancelOrRestoreTimedSession()
+          }
+
+          ACTION_RESTORE_PERSISTENT_QUICK_BAR -> {
+            val prefs = repo.preferencesStream.first()
+            if (prefs.persistentQuickBarEnabled) {
+              repo.syncExternalSurfacesNow()
+            }
           }
 
           Intent.ACTION_BOOT_COMPLETED,
@@ -128,6 +142,7 @@ class SystemAutomationReceiver : BroadcastReceiver() {
               currentState
             }
             repo.startTimedStateSession(targetState = targetState, durationMinutes = minutes)
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
 
           ACTION_NOTIFICATION_EXTEND_TIMER -> {
@@ -139,11 +154,13 @@ class SystemAutomationReceiver : BroadcastReceiver() {
           ACTION_NOTIFICATION_RESTORE_NOW -> {
             if (!canChangeSound()) return@launch
             repo.cancelOrRestoreTimedSession()
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
 
           ACTION_NOTIFICATION_REAPPLY_RULE -> {
             if (!canChangeSound()) return@launch
             repo.reapplyActiveRule()
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
 
           ACTION_WIDGET_SET_MODE -> {
@@ -151,6 +168,7 @@ class SystemAutomationReceiver : BroadcastReceiver() {
             val modeRaw = intent.getStringExtra(EXTRA_SOUND_MODE) ?: return@launch
             val targetMode = runCatching { SoundMode.valueOf(modeRaw) }.getOrNull() ?: return@launch
             repo.setSoundMode(targetMode, source = TransitionTriggerSource.WIDGET)
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
 
           ACTION_WIDGET_SET_AUDIO_MODE -> {
@@ -158,16 +176,19 @@ class SystemAutomationReceiver : BroadcastReceiver() {
             val audioModeRaw = intent.getStringExtra(EXTRA_BASE_AUDIO_MODE) ?: return@launch
             val targetAudioMode = runCatching { BaseAudioMode.valueOf(audioModeRaw) }.getOrNull() ?: return@launch
             repo.setBaseAudioMode(targetAudioMode, source = TransitionTriggerSource.NOTIFICATION)
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
 
           ACTION_WIDGET_TOGGLE_VIBRATE -> {
             if (!canChangeSound()) return@launch
             repo.toggleVibrate(source = TransitionTriggerSource.NOTIFICATION)
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
 
           ACTION_WIDGET_CYCLE_MODE -> {
             if (!canChangeSound()) return@launch
             repo.cycleSoundModeFromQuickTile()
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
 
           ACTION_ACTIVATE_PROFILE -> {
@@ -176,6 +197,7 @@ class SystemAutomationReceiver : BroadcastReceiver() {
             val profiles = repo.profilesStream.first()
             val target = profiles.firstOrNull { it.id == profileId } ?: return@launch
             repo.activateProfile(target, source = TransitionTriggerSource.WIDGET)
+              .onFailure { handleDndFailureIfNeeded(app, it) }
           }
         }
       } catch (e: Exception) {
@@ -186,10 +208,25 @@ class SystemAutomationReceiver : BroadcastReceiver() {
     }
   }
 
+  private fun handleDndFailureIfNeeded(context: Context, error: Throwable) {
+    if (error is DndPermissionRequiredException) {
+      val settingsIntent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      runCatching { context.startActivity(settingsIntent) }
+        .onFailure { Log.w(TAG, "Abertura direta de DND bloqueada em background; publicando alerta", it) }
+      SmartNotificationManager.showDndPermissionAlert(context)
+    }
+  }
+
   companion object {
     private const val TAG = "SystemAutoReceiver"
     const val ACTION_EVALUATE_RULES_ALARM =
       "com.managesoundmode.app.action.EVALUATE_RULES_ALARM"
+    const val ACTION_TIMER_EXPIRED_ALARM =
+      "com.managesoundmode.app.action.TIMER_EXPIRED_ALARM"
+    const val ACTION_RESTORE_PERSISTENT_QUICK_BAR =
+      "com.managesoundmode.app.action.RESTORE_PERSISTENT_QUICK_BAR"
     const val ACTION_GEOFENCE_TRANSITION =
       "com.managesoundmode.app.action.GEOFENCE_TRANSITION"
     const val ACTION_PASSIVE_LOCATION_UPDATE =

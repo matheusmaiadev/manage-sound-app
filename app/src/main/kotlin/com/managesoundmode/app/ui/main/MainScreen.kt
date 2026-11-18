@@ -1,6 +1,9 @@
 package com.managesoundmode.app.ui.main
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -8,6 +11,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -204,10 +208,38 @@ fun MainScreen(
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val context = LocalContext.current
 
+  val openAppNotificationSettings: () -> Unit = {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+      putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
+      .onFailure {
+        val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          data = Uri.fromParts("package", context.packageName, null)
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(fallback) }
+          .onFailure { err -> Log.w("MainScreen", "Falha ao abrir configurações de notificações", err) }
+      }
+  }
+
   val notificationPermissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission(),
-  ) { _ ->
-    viewModel.onRefreshSystemState()
+  ) { isGranted ->
+    viewModel.onNotificationPermissionResult(isGranted)
+    if (!isGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      val activity = context.findActivity()
+      val shouldShowRationaleAfter = activity?.let {
+        ActivityCompat.shouldShowRequestPermissionRationale(
+          it,
+          Manifest.permission.POST_NOTIFICATIONS,
+        )
+      } ?: false
+      if (!shouldShowRationaleAfter) {
+        openAppNotificationSettings()
+      }
+    }
   }
 
   val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -300,11 +332,7 @@ fun MainScreen(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !state.hasNotificationPermission) {
               notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
-              val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-              }
-              runCatching { context.startActivity(intent) }
+              openAppNotificationSettings()
             }
           },
           onReapplyActiveRule = viewModel::onReapplyActiveRule,
@@ -355,13 +383,20 @@ fun MainScreen(
           onTestSmartNotification = {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !state.hasNotificationPermission) {
               notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+              viewModel.onShowStatusMessage(AppLabels.Settings.notificationPermissionRequiredMessage)
             } else {
-              val previewMode = if (state.currentMode == SoundMode.NORMAL) SoundMode.VIBRATE else state.currentMode
+              val previewState = if (state.currentSoundState.audioMode == BaseAudioMode.SOUND) {
+                SoundState(audioMode = BaseAudioMode.SILENT, vibrateEnabled = true)
+              } else {
+                state.currentSoundState
+              }
               SmartNotificationManager.showSmartRestorePrompt(
                 context = context,
-                mode = previewMode,
+                mode = previewState.toLegacyApproximation(),
                 mediaAutoMuted = state.muteMediaOnSilent,
+                state = previewState,
               )
+              viewModel.onShowStatusMessage(AppLabels.Settings.testSmartNotificationSentMessage)
             }
           },
           onPinHomeWidget = {
@@ -534,7 +569,8 @@ internal fun MainDashboardContent(
   var showLocationDisclosureDialog by rememberSaveable { mutableStateOf(false) }
   var showLocationBottomSheet by rememberSaveable { mutableStateOf(false) }
 
-  LaunchedEffect(state.statusMessage) {
+  LaunchedEffect(state.statusMessage, showSettingsFullScreen, globalSettingsDialogCategory) {
+    if (showSettingsFullScreen || globalSettingsDialogCategory != null) return@LaunchedEffect
     val msg = state.statusMessage ?: return@LaunchedEffect
     snackbarHostState.showSnackbar(msg)
     onDismissMessage()
@@ -756,6 +792,7 @@ internal fun MainDashboardContent(
           onRequestExactAlarmPermission = onRequestExactAlarmPermission,
           onRequestNotificationPermission = onRequestNotificationPermission,
           onClearLogs = onClearLogs,
+          onDismissMessage = onDismissMessage,
           onResetFactoryDefaults = onResetFactoryDefaults,
           onExportBackupJson = onExportBackupJson,
           onImportBackupJson = onImportBackupJson,
@@ -804,6 +841,7 @@ internal fun MainDashboardContent(
       onRequestExactAlarmPermission = onRequestExactAlarmPermission,
       onRequestNotificationPermission = onRequestNotificationPermission,
       onClearLogs = onClearLogs,
+      onDismissMessage = onDismissMessage,
       onRequestFactoryResetConfirm = { showGlobalResetConfirmDialog = true },
       onExportBackupJson = onExportBackupJson,
       onImportBackupJson = onImportBackupJson,
@@ -2155,4 +2193,10 @@ private fun MainDashboardPreview() {
       onRequestDndPermission = {},
     )
   }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.findActivity()
+  else -> null
 }

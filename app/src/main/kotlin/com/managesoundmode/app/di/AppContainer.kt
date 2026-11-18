@@ -1,8 +1,6 @@
 package com.managesoundmode.app.di
 
-import android.content.ComponentName
 import android.content.Context
-import android.service.quicksettings.TileService
 import com.managesoundmode.app.data.local.DataStoreSoundPreferencesDataSource
 import com.managesoundmode.app.data.local.SoundPreferencesDataSource
 import com.managesoundmode.app.data.repository.DefaultSoundModeRepository
@@ -10,6 +8,7 @@ import com.managesoundmode.app.data.repository.SoundModeRepository
 import com.managesoundmode.app.data.system.AndroidSoundSystemController
 import com.managesoundmode.app.data.system.SoundSystemController
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.system.AppShortcutsManager
 import com.managesoundmode.app.system.BackgroundGeofenceManager
 import com.managesoundmode.app.system.ExactRuleAlarmScheduler
 import com.managesoundmode.app.system.SmartNotificationManager
@@ -43,6 +42,12 @@ class DefaultAppContainer(
       preferencesDataSource = preferencesDataSource,
       onScheduleAutoRestore = { minutes -> RestoreSoundModeWorker.schedule(appContext, minutes) },
       onCancelAutoRestore = { RestoreSoundModeWorker.cancel(appContext) },
+      onScheduleExactTimerAlarm = { endsAtMillis ->
+        ExactRuleAlarmScheduler.scheduleTimerExpiration(appContext, endsAtMillis)
+      },
+      onCancelExactTimerAlarm = {
+        ExactRuleAlarmScheduler.cancelTimerExpiration(appContext)
+      },
       onRescheduleRuleAlarms = { rules ->
         ExactRuleAlarmScheduler.scheduleNextTransition(appContext, rules)
       },
@@ -62,14 +67,28 @@ class DefaultAppContainer(
       onRuleOverrideAlert = { ruleName ->
         SmartNotificationManager.showRuleOverrideAlert(appContext, ruleName)
       },
+      onAutoRoutineTransitionAlert = { title, subtitle, state ->
+        SmartNotificationManager.showAutoRoutineTransition(
+          context = appContext,
+          title = title,
+          subtitle = subtitle,
+          state = state,
+        )
+      },
+      onLanguageChanged = {
+        SmartNotificationManager.ensureChannels(appContext)
+        AppShortcutsManager.publishDynamicShortcuts(appContext)
+      },
       onRefreshExternalSurfaces = {
         SoundModeGlanceWidget.refreshAllWidgets(appContext)
         runCatching {
           val prefs = preferencesDataSource.prefsFlow.first()
-          val allProfiles = (SoundProfile.defaultPresets.filterNot { it.id in prefs.deletedProfileIds } +
-            prefs.customProfiles).distinctBy { it.id }
+          val allProfiles = SoundProfile.mergeProfiles(
+            savedProfiles = prefs.customProfiles,
+            deletedIds = prefs.deletedProfileIds,
+          )
           val activeProfileName = prefs.activeProfileId?.let { activeId ->
-            allProfiles.lastOrNull { it.id == activeId }?.name
+            allProfiles.firstOrNull { it.id == activeId }?.name
           }
           val currentSoundState = soundSystemController.readSoundState()
           SmartNotificationManager.syncPersistentQuickBarNotification(
@@ -80,6 +99,7 @@ class DefaultAppContainer(
             streams = soundSystemController.readVolumeStreams(),
             activeProfileName = activeProfileName,
             activeTimer = prefs.activeTimer,
+            hasDndPermission = soundSystemController.hasDndPermission(),
           )
           SystemZenRuleManager.syncProfilesToSystemZenRules(
             context = appContext,

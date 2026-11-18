@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Zenith Dark Mode (Noite Boreal) — Notification Quick Bar -->
+    <color name="notif_text_primary">#FFF8FAFC</color>
+    <color name="notif_text_secondary">#FF94A3B8</color>
+    <color name="notif_capsule_track">#FF1E293B</color>
+    <color name="notif_capsule_stroke">#FF334155</color>
+    <color name="notif_pill_inactive_bg">#FF161F33</color>
+    <color name="notif_pill_inactive_fg">#FFCBD5E1</color>
+    <color name="notif_sound_active_bg">#FF2DD4BF</color>
+    <color name="notif_sound_active_fg">#FF042F2E</color>
+    <color name="notif_silent_active_bg">#FFA78BFA</color>
+    <color name="notif_silent_active_fg">#FF1E1B4B</color>
+    <color name="notif_vibrate_active_bg">#FFFBBF24</color>
+    <color name="notif_vibrate_active_fg">#FF271700</color>
+</resources>

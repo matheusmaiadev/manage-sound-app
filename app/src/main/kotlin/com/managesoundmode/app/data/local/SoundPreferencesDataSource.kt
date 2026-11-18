@@ -70,6 +70,7 @@ data class PersistedSoundPrefs(
   val restorePolicy: RestorePolicy = RestorePolicy.DEFAULT_PROFILE,
   val defaultDayProfileId: String = SoundProfile.DEFAULT_DAY_PROFILE_ID,
   val savedSnapshot: SavedStateSnapshot? = null,
+  val lastActiveSoundSnapshot: SavedStateSnapshot? = null,
   val lastAppliedRuleSessionKey: String? = null,
   val overriddenSessionKey: String? = null,
   val transitionLogs: List<TransitionLogEntry> = emptyList(),
@@ -107,6 +108,7 @@ interface SoundPreferencesDataSource {
   suspend fun setRestorePolicy(policy: RestorePolicy) {}
   suspend fun setDefaultDayProfileId(profileId: String) {}
   suspend fun setSavedSnapshot(snapshot: SavedStateSnapshot?) {}
+  suspend fun setLastActiveSoundSnapshot(snapshot: SavedStateSnapshot?) {}
   suspend fun setLastAppliedRuleSessionKey(sessionKey: String?) {}
   suspend fun setOverriddenSessionKey(sessionKey: String?) {}
   suspend fun appendTransitionLog(entry: TransitionLogEntry) {}
@@ -191,6 +193,10 @@ class DataStoreSoundPreferencesDataSource(
           runCatching { json.decodeFromString<SavedStateSnapshot>(raw) }.getOrNull()
         }
 
+        val lastActiveSoundSnapshot = prefs[KEY_LAST_ACTIVE_SOUND_SNAPSHOT_JSON]?.let { raw ->
+          runCatching { json.decodeFromString<SavedStateSnapshot>(raw) }.getOrNull()
+        }
+
         val transitionLogs = prefs[KEY_TRANSITION_LOGS_JSON]?.let { raw ->
           runCatching { json.decodeFromString<List<TransitionLogEntry>>(raw) }
             .getOrDefault(emptyList())
@@ -216,6 +222,7 @@ class DataStoreSoundPreferencesDataSource(
           restorePolicy = restorePolicy,
           defaultDayProfileId = defaultDayProfileId,
           savedSnapshot = savedSnapshot,
+          lastActiveSoundSnapshot = lastActiveSoundSnapshot,
           lastAppliedRuleSessionKey = prefs[KEY_LAST_APPLIED_RULE_SESSION_KEY],
           overriddenSessionKey = prefs[KEY_OVERRIDDEN_SESSION_KEY],
           transitionLogs = transitionLogs,
@@ -368,6 +375,16 @@ class DataStoreSoundPreferencesDataSource(
         prefs.remove(KEY_SAVED_SNAPSHOT_JSON)
       } else {
         prefs[KEY_SAVED_SNAPSHOT_JSON] = json.encodeToString(snapshot)
+      }
+    }
+  }
+
+  override suspend fun setLastActiveSoundSnapshot(snapshot: SavedStateSnapshot?) {
+    context.soundDataStore.edit { prefs ->
+      if (snapshot == null) {
+        prefs.remove(KEY_LAST_ACTIVE_SOUND_SNAPSHOT_JSON)
+      } else {
+        prefs[KEY_LAST_ACTIVE_SOUND_SNAPSHOT_JSON] = json.encodeToString(snapshot)
       }
     }
   }
@@ -536,6 +553,7 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_RESTORE_POLICY] = RestorePolicy.DEFAULT_PROFILE.name
       prefs[KEY_DEFAULT_DAY_PROFILE_ID] = SoundProfile.DEFAULT_DAY_PROFILE_ID
       prefs.remove(KEY_SAVED_SNAPSHOT_JSON)
+      prefs.remove(KEY_LAST_ACTIVE_SOUND_SNAPSHOT_JSON)
       prefs.remove(KEY_LAST_APPLIED_RULE_SESSION_KEY)
       prefs.remove(KEY_OVERRIDDEN_SESSION_KEY)
       prefs[KEY_AUTOMATIONS_PAUSED] = false
@@ -651,6 +669,7 @@ class DataStoreSoundPreferencesDataSource(
     val KEY_RESTORE_POLICY = stringPreferencesKey("restore_policy")
     val KEY_DEFAULT_DAY_PROFILE_ID = stringPreferencesKey("default_day_profile_id")
     val KEY_SAVED_SNAPSHOT_JSON = stringPreferencesKey("saved_snapshot_json")
+    val KEY_LAST_ACTIVE_SOUND_SNAPSHOT_JSON = stringPreferencesKey("last_active_sound_snapshot_json")
     val KEY_LAST_APPLIED_RULE_SESSION_KEY = stringPreferencesKey("last_applied_rule_session_key")
     val KEY_OVERRIDDEN_SESSION_KEY = stringPreferencesKey("overridden_session_key")
     val KEY_TRANSITION_LOGS_JSON = stringPreferencesKey("transition_logs_json")
