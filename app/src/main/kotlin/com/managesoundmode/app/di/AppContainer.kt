@@ -8,11 +8,13 @@ import com.managesoundmode.app.data.repository.SoundModeRepository
 import com.managesoundmode.app.data.system.AndroidSoundSystemController
 import com.managesoundmode.app.data.system.SoundSystemController
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.system.AndroidVolumePreviewPlayer
 import com.managesoundmode.app.system.AppShortcutsManager
 import com.managesoundmode.app.system.BackgroundGeofenceManager
 import com.managesoundmode.app.system.ExactRuleAlarmScheduler
 import com.managesoundmode.app.system.SmartNotificationManager
 import com.managesoundmode.app.system.SystemZenRuleManager
+import com.managesoundmode.app.system.VolumePreviewPlayer
 import com.managesoundmode.app.tile.SoundModeTileService
 import com.managesoundmode.app.widget.SoundModeGlanceWidget
 import com.managesoundmode.app.work.RestoreSoundModeWorker
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.first
 interface AppContainer {
   val soundSystemController: SoundSystemController
   val preferencesDataSource: SoundPreferencesDataSource
+  val volumePreviewPlayer: VolumePreviewPlayer
   val soundModeRepository: SoundModeRepository
 }
 
@@ -34,6 +37,10 @@ class DefaultAppContainer(
 
   override val preferencesDataSource: SoundPreferencesDataSource by lazy {
     DataStoreSoundPreferencesDataSource(appContext)
+  }
+
+  override val volumePreviewPlayer: VolumePreviewPlayer by lazy {
+    AndroidVolumePreviewPlayer(appContext)
   }
 
   override val soundModeRepository: SoundModeRepository by lazy {

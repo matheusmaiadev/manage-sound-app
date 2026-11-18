@@ -30,6 +30,13 @@ enum class VolumeStreamType {
   val microDescription: String
     get() = AppLabels.Domain.streamTypeMicroDescription(this)
 
+  /**
+   * Canais acoplados ao estado de toque do Android (`RINGER_MODE_SILENT` / `RINGER_MODE_VIBRATE`)
+   * que não devem desarmar o silêncio do aparelho ao serem pré-ajustados (SPEC-005 / Issue #3).
+   */
+  val isMutedBySilentRinger: Boolean
+    get() = this == RING || this == NOTIFICATION || this == SYSTEM
+
   companion object {
     val defaultOrder: List<VolumeStreamType> = listOf(
       MEDIA,

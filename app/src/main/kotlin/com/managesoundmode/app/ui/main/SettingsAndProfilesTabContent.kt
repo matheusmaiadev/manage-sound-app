@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
@@ -58,6 +59,7 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SettingsBrightness
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
@@ -190,6 +192,9 @@ internal fun SettingsAndProfilesTabContent(
   onSetVisibleFixedStreamsCount: (Int) -> Unit = {},
   onSetStreamSortMode: (StreamSortMode) -> Unit = {},
   onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
+  onSetVolumePreviewEnabled: (Boolean) -> Unit = {},
+  onSetUseSystemSoundsForPreview: (Boolean) -> Unit = {},
+  onSetSilentPreAdjustEnabled: (Boolean) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var openCategory by rememberSaveable { mutableStateOf<SettingsCategory?>(null) }
@@ -294,6 +299,9 @@ internal fun SettingsAndProfilesTabContent(
       onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
       onSetStreamSortMode = onSetStreamSortMode,
       onMoveStreamInManualOrder = onMoveStreamInManualOrder,
+      onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
+      onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
+      onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
     )
   }
 
@@ -735,6 +743,9 @@ internal fun SettingsCategoryFullScreenDialog(
   onSetVisibleFixedStreamsCount: (Int) -> Unit = {},
   onSetStreamSortMode: (StreamSortMode) -> Unit = {},
   onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
+  onSetVolumePreviewEnabled: (Boolean) -> Unit = {},
+  onSetUseSystemSoundsForPreview: (Boolean) -> Unit = {},
+  onSetSilentPreAdjustEnabled: (Boolean) -> Unit = {},
 ) {
   val context = LocalContext.current
   val subScreenSnackbarHostState = remember { SnackbarHostState() }
@@ -852,6 +863,9 @@ internal fun SettingsCategoryFullScreenDialog(
             onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
             onSetStreamSortMode = onSetStreamSortMode,
             onMoveStreamInManualOrder = onMoveStreamInManualOrder,
+            onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
+            onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
+            onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
             onRequestNotificationPermission = onRequestNotificationPermission,
             modifier = Modifier.padding(innerPadding),
           )
@@ -1651,6 +1665,9 @@ private fun AudioAndTimerSettingsSubScreen(
   onSetVisibleFixedStreamsCount: (Int) -> Unit = {},
   onSetStreamSortMode: (StreamSortMode) -> Unit = {},
   onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
+  onSetVolumePreviewEnabled: (Boolean) -> Unit = {},
+  onSetUseSystemSoundsForPreview: (Boolean) -> Unit = {},
+  onSetSilentPreAdjustEnabled: (Boolean) -> Unit = {},
   onRequestNotificationPermission: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
@@ -1874,6 +1891,147 @@ private fun AudioAndTimerSettingsSubScreen(
             )
           }
         }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(14.dp))
+    SectionHeader(title = AppLabels.Settings.volumePreviewSectionTitle)
+
+    // Preview Sonoro sob Comando
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = groupedCardShape(index = 0, totalCount = 3),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.GraphicEq,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column {
+            Text(
+              text = AppLabels.Settings.volumePreviewEnabledTitle,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = AppLabels.Settings.volumePreviewEnabledSubtitle,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+        M3CheckSwitch(
+          checked = state.volumePreviewEnabled,
+          onCheckedChange = onSetVolumePreviewEnabled,
+          modifier = Modifier.testTag(AppTestTags.Settings.VOLUME_PREVIEW_SWITCH),
+        )
+      }
+    }
+
+    // Usar Sons Reais do Aparelho vs Acorde Acústico Zenith
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = groupedCardShape(index = 1, totalCount = 3),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column {
+            Text(
+              text = AppLabels.Settings.useSystemSoundsPreviewTitle,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = AppLabels.Settings.useSystemSoundsPreviewSubtitle,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+        M3CheckSwitch(
+          checked = state.useSystemSoundsForPreview,
+          onCheckedChange = onSetUseSystemSoundsForPreview,
+          modifier = Modifier.testTag(AppTestTags.Settings.SYSTEM_SOUNDS_PREVIEW_SWITCH),
+        )
+      }
+    }
+
+    // Pré-Ajuste Silencioso de Canais
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = groupedCardShape(index = 2, totalCount = 3),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Shield,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column {
+            Text(
+              text = AppLabels.Settings.silentPreAdjustTitle,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = AppLabels.Settings.silentPreAdjustSubtitle,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+        M3CheckSwitch(
+          checked = state.silentPreAdjustEnabled,
+          onCheckedChange = onSetSilentPreAdjustEnabled,
+          modifier = Modifier.testTag(AppTestTags.Settings.SILENT_PREADJUST_SWITCH),
+        )
       }
     }
 

@@ -42,6 +42,7 @@ import com.managesoundmode.app.system.BackgroundGeofenceManager
 import com.managesoundmode.app.system.InternalIntentSecurity
 import com.managesoundmode.app.system.SmartNotificationManager
 import com.managesoundmode.app.system.SystemZenRuleManager
+import com.managesoundmode.app.system.VolumePreviewScope
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
 import com.managesoundmode.app.ui.common.AppTestTags
@@ -940,6 +941,143 @@ class ManageSoundModeE2ETest {
         .performScrollTo()
         .assertIsDisplayed()
     } finally {
+      runBlocking {
+        app.container.preferencesDataSource.resetFactoryDefaults()
+        app.container.preferencesDataSource.setOnboardingCompleted(true)
+        app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
+        app.container.soundModeRepository.refreshSystemState()
+      }
+    }
+  }
+
+  @Test
+  fun e2e11_spec005_realVolumePreviewEngineSilentPreAdjustAndProfileEditorIsolatedRestore() {
+    val audioManager = app.getSystemService(AudioManager::class.java)!!
+    val controller = app.container.soundSystemController
+    val repo = app.container.soundModeRepository
+    val previewPlayer = app.container.volumePreviewPlayer
+
+    try {
+      runBlocking {
+        app.container.preferencesDataSource.setAutomationsPaused(true)
+        repo.setSoundState(SoundState(BaseAudioMode.SOUND, true)).getOrThrow()
+        repo.setStreamVolume(VolumeStreamType.MEDIA, 28).getOrThrow()
+        repo.refreshSystemState()
+      }
+      composeRule.waitForIdle()
+
+      // 1. AC-03: Real AndroidVolumePreviewPlayer plays and stops cleanly across RingtoneManager & AudioTrack streams
+      listOf(
+        VolumeStreamType.RING,
+        VolumeStreamType.ALARM,
+        VolumeStreamType.MEDIA,
+        VolumeStreamType.VOICE_CALL,
+        VolumeStreamType.ACCESSIBILITY,
+      ).forEach { streamType ->
+        composeRule.runOnIdle {
+          previewPlayer.playSingle(
+            streamType = streamType,
+            percent = 50,
+            useSystemSounds = true,
+            scope = VolumePreviewScope.NOW_TAB,
+          )
+        }
+        assertEquals(streamType, previewPlayer.previewState.value?.streamType)
+        composeRule.runOnIdle {
+          previewPlayer.stop()
+        }
+        assertNull(previewPlayer.previewState.value)
+      }
+
+      // 2. AC-04: Enter Silêncio + Vibrar, pre-adjust RING (74%) & SYSTEM (46%) WITHOUT disarming RINGER_MODE_VIBRATE
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
+      composeRule.waitUntil(5_000L) {
+        audioManager.ringerMode == AudioManager.RINGER_MODE_VIBRATE
+      }
+      composeRule.waitForIdle()
+
+      runBlocking {
+        repo.setStreamVolume(VolumeStreamType.RING, 74).getOrThrow()
+        repo.setStreamVolume(VolumeStreamType.SYSTEM, 46).getOrThrow()
+      }
+      composeRule.waitForIdle()
+
+      assertEquals(AudioManager.RINGER_MODE_VIBRATE, audioManager.ringerMode)
+      val prefsPending = awaitPrefs("pendingStreams") {
+        it.pendingSoundStreams[VolumeStreamType.RING] == 74 &&
+          it.pendingSoundStreams[VolumeStreamType.NOTIFICATION] == 74 &&
+          it.pendingSoundStreams[VolumeStreamType.SYSTEM] == 46
+      }
+      assertEquals(74, prefsPending.pendingSoundStreams[VolumeStreamType.RING])
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamPendingBadge(VolumeStreamType.RING))
+        .performScrollTo()
+        .assertIsDisplayed()
+
+      // 3. Silent-mode preview safety dialog on Now tab -> Listen now -> Stop restores RINGER_MODE_VIBRATE
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.RING))
+        .performScrollTo()
+        .performClick()
+      composeRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_CONFIRM_DIALOG).assertIsDisplayed()
+      composeRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_LISTEN_NOW_BUTTON).performClick()
+      composeRule.waitUntil(3_000L) {
+        previewPlayer.previewState.value != null
+      }
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.RING))
+        .performClick()
+      composeRule.waitUntil(3_000L) {
+        previewPlayer.previewState.value == null &&
+          audioManager.ringerMode == AudioManager.RINGER_MODE_VIBRATE
+      }
+      assertEquals(AudioManager.RINGER_MODE_VIBRATE, audioManager.ringerMode)
+
+      // 4. Transition back to [Som] -> automatically applies pending RING/NOTIFICATION/SYSTEM to AudioManager and clears pending
+      composeRule
+        .onNodeWithTag(AppTestTags.Now.LIST)
+        .performScrollToNode(hasTestTag(AppTestTags.Now.HERO_MODE_CARD))
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SOUND_BUTTON).performClick()
+      composeRule.waitUntil(5_000L) {
+        audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL
+      }
+      composeRule.waitForIdle()
+      val prefsCleared = awaitPrefs("pendingCleared") { it.pendingSoundStreams.isEmpty() }
+      assertTrue(prefsCleared.pendingSoundStreams.isEmpty())
+      assertTrue(controller.readVolumeStreams().ringPercent > 0)
+      assertTrue(controller.readVolumeStreams().systemPercent > 0)
+
+      // 5. AC-05: ProfileEditorBottomSheet isolated preview on inactive profile ("preset_home" has MEDIA=60%) restores baseline MEDIA=28%
+      runBlocking {
+        repo.setStreamVolume(VolumeStreamType.MEDIA, 28).getOrThrow()
+      }
+      val baselineMediaIndex = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+
+      composeRule.onNodeWithTag(AppTestTags.Tabs.PROFILES).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Profiles.editButton("preset_home")).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Profiles.menuEditItem("preset_home")).performClick()
+      composeRule.waitForIdle()
+
+      composeRule
+        .onNodeWithTag(AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.MEDIA))
+        .performScrollTo()
+        .performClick()
+      composeRule.waitUntil(3_000L) {
+        previewPlayer.previewState.value?.scope == VolumePreviewScope.PROFILE_EDITOR
+      }
+      assertTrue(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) >= baselineMediaIndex)
+
+      // Stop preview in editor and verify hardware MEDIA index is restored to exact baseline
+      composeRule
+        .onNodeWithTag(AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.MEDIA))
+        .performClick()
+      composeRule.waitUntil(3_000L) {
+        previewPlayer.previewState.value == null &&
+          audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == baselineMediaIndex
+      }
+      assertEquals(baselineMediaIndex, audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
+    } finally {
+      previewPlayer.stop()
       runBlocking {
         app.container.preferencesDataSource.resetFactoryDefaults()
         app.container.preferencesDataSource.setOnboardingCompleted(true)

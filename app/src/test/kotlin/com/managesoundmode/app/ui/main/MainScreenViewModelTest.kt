@@ -24,7 +24,10 @@ import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.system.BackgroundGeofenceManager
+import com.managesoundmode.app.system.FakeVolumePreviewPlayer
 import com.managesoundmode.app.system.SystemZenRuleManager
+import com.managesoundmode.app.system.VolumePreviewKind
+import com.managesoundmode.app.system.VolumePreviewScope
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
 import com.managesoundmode.app.ui.common.AppTestTags
@@ -259,6 +262,14 @@ class MainScreenViewModelTest {
     viewModel.onSelectMode(SoundMode.VIBRATE)
     assertEquals(SoundMode.VIBRATE, (viewModel.uiState.value as MainScreenUiState.Ready).currentMode)
 
+    // Com silentPreAdjustEnabled = true (padrão SPEC-005), preserva VIBRATE e guarda pré-ajuste pendente
+    viewModel.onStreamVolumeChange(VolumeStreamType.RING, 70)
+    val duringSilentPreAdjust = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundMode.VIBRATE, duringSilentPreAdjust.currentMode)
+    assertEquals(70, duringSilentPreAdjust.displayedStreamPercent(VolumeStreamType.RING))
+
+    // Quando silentPreAdjustEnabled = false, ajustar RING > 0% desarma VIBRATE e muda para NORMAL
+    viewModel.onSetSilentPreAdjustEnabled(false)
     viewModel.onStreamVolumeChange(VolumeStreamType.RING, 70)
     val afterRing = viewModel.uiState.value as MainScreenUiState.Ready
     assertEquals(SoundMode.NORMAL, afterRing.currentMode)
@@ -1411,6 +1422,229 @@ class MainScreenViewModelTest {
     assertEquals(5, afterSpec007Restore.visibleFixedStreamsCount)
     assertEquals(StreamSortMode.MANUAL, afterSpec007Restore.streamSortMode)
   }
+
+  @Test
+  fun spec005_ac02_ac03_volumePreviewPlayer_singleTapLoopLiveUpdateStopAndAllSevenStreams() = runTest {
+    fakePreferences.clearSchedules()
+    val fakePreview = FakeVolumePreviewPlayer()
+    val vm = MainScreenViewModel(repository = repository, previewPlayer = fakePreview)
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      vm.uiState.collect()
+    }
+
+    // 1. One-shot preview works across all 7 VolumeStreamTypes and toggles off on second tap
+    VolumeStreamType.entries.forEachIndexed { idx, type ->
+      val target = 40 + idx * 5
+      vm.onToggleStreamPreview(type = type, percent = target, scope = VolumePreviewScope.NOW_TAB)
+      val playingState = vm.uiState.value as MainScreenUiState.Ready
+      assertEquals(type, playingState.activeVolumePreview?.streamType)
+      assertEquals(VolumePreviewKind.ONE_SHOT, playingState.activeVolumePreview?.kind)
+      assertEquals(target, playingState.activeVolumePreview?.percent)
+
+      // Tapping same stream again stops immediately
+      vm.onToggleStreamPreview(type = type, percent = target, scope = VolumePreviewScope.NOW_TAB)
+      assertNull((vm.uiState.value as MainScreenUiState.Ready).activeVolumePreview)
+    }
+    assertEquals(7, fakePreview.playHistory.size)
+
+    // 2. Hold-loop preview + live drag percent updates linked RING & NOTIFICATION in real time
+    vm.onStartStreamLoopPreview(
+      type = VolumeStreamType.RING,
+      percent = 55,
+      scope = VolumePreviewScope.NOW_TAB,
+    )
+    assertEquals(
+      VolumePreviewKind.HOLD_LOOP,
+      (vm.uiState.value as MainScreenUiState.Ready).activeVolumePreview?.kind,
+    )
+
+    vm.onUpdateStreamLoopPercent(
+      type = VolumeStreamType.RING,
+      percent = 82,
+      scope = VolumePreviewScope.NOW_TAB,
+    )
+    assertEquals(82, (vm.uiState.value as MainScreenUiState.Ready).activeVolumePreview?.percent)
+    assertEquals(82, fakeSystemController.streams.ringPercent)
+    assertEquals(82, fakeSystemController.streams.notificationPercent)
+
+    vm.onStopVolumePreview()
+    assertNull((vm.uiState.value as MainScreenUiState.Ready).activeVolumePreview)
+
+    // 3. Quick mute toggle chip & useSystemSoundsForPreview setting
+    vm.onSetUseSystemSoundsForPreview(false)
+    vm.onToggleStreamPreview(VolumeStreamType.ALARM, 75)
+    assertEquals(false, fakePreview.lastUseSystemSounds)
+
+    vm.onToggleVolumePreviewQuick()
+    val mutedPreviewState = vm.uiState.value as MainScreenUiState.Ready
+    assertEquals(false, mutedPreviewState.volumePreviewEnabled)
+    assertNull(mutedPreviewState.activeVolumePreview)
+
+    // While muted on Now tab, tapping preview does not fire new samples
+    val historyCountBefore = fakePreview.playHistory.size
+    vm.onToggleStreamPreview(VolumeStreamType.MEDIA, 60)
+    assertEquals(historyCountBefore, fakePreview.playHistory.size)
+  }
+
+  @Test
+  fun spec005_ac04_silentPreAdjustment_preservesSilentAndVibrateRespectsLinkAndAppliesOnReturnToSound() = runTest {
+    fakePreferences.clearSchedules()
+    val fakePreview = FakeVolumePreviewPlayer()
+    val vm = MainScreenViewModel(repository = repository, previewPlayer = fakePreview)
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      vm.uiState.collect()
+    }
+
+    // 1. Enter Silêncio + Vibrar (audioMode = SILENT, vibrateEnabled = true) with hardware RING = 0
+    vm.onSelectAudioMode(BaseAudioMode.SILENT)
+    fakeSystemController.streams = fakeSystemController.streams.copy(
+      ringPercent = 0,
+      notificationPercent = 0,
+      systemPercent = 0,
+    )
+    vm.onRefreshSystemState()
+
+    val inSilent = vm.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), inSilent.currentSoundState)
+
+    // 2. Pre-adjust RING to 78% while linked -> OS stays in SILENT + Vibrar and both RING & NOTIFICATION become pending
+    vm.onStreamVolumeChange(VolumeStreamType.RING, 78)
+    vm.onStreamVolumeChange(VolumeStreamType.SYSTEM, 45)
+    // Independent channels (MEDIA, ALARM, VOICE_CALL, ACCESSIBILITY) update hardware directly without disarming SILENT
+    vm.onStreamVolumeChange(VolumeStreamType.MEDIA, 55)
+    vm.onStreamVolumeChange(VolumeStreamType.VOICE_CALL, 72)
+
+    val afterPreAdjust = vm.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), afterPreAdjust.currentSoundState)
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), fakeSystemController.soundState)
+    assertEquals(0, fakeSystemController.streams.ringPercent)
+    assertEquals(55, fakeSystemController.streams.mediaPercent)
+    assertEquals(72, fakeSystemController.streams.voiceCallPercent)
+    assertEquals(78, afterPreAdjust.displayedStreamPercent(VolumeStreamType.RING))
+    assertEquals(78, afterPreAdjust.displayedStreamPercent(VolumeStreamType.NOTIFICATION))
+    assertEquals(45, afterPreAdjust.displayedStreamPercent(VolumeStreamType.SYSTEM))
+    assertTrue(afterPreAdjust.isStreamPendingForSound(VolumeStreamType.RING))
+    assertTrue(afterPreAdjust.isStreamPendingForSound(VolumeStreamType.NOTIFICATION))
+    assertTrue(afterPreAdjust.isStreamPendingForSound(VolumeStreamType.SYSTEM))
+    assertEquals(false, afterPreAdjust.isStreamPendingForSound(VolumeStreamType.MEDIA))
+
+    // 3. Unlink RING/NOTIFICATION while in SILENT and set NOTIFICATION independently to 34%
+    vm.onToggleRingNotificationLink()
+    vm.onStreamVolumeChange(VolumeStreamType.NOTIFICATION, 34)
+    val unlinkedPending = vm.uiState.value as MainScreenUiState.Ready
+    assertEquals(78, unlinkedPending.displayedStreamPercent(VolumeStreamType.RING))
+    assertEquals(34, unlinkedPending.displayedStreamPercent(VolumeStreamType.NOTIFICATION))
+
+    // 4. Authorized temporary preview in SILENT mode plays sample and restores SILENT + Vibrar right after
+    vm.onToggleStreamPreview(
+      type = VolumeStreamType.RING,
+      percent = 78,
+      scope = VolumePreviewScope.NOW_TAB,
+      authorizedSilentOverride = true,
+    )
+    assertEquals(BaseAudioMode.SOUND, fakeSystemController.soundState.audioMode)
+    assertEquals(78, fakeSystemController.streams.ringPercent)
+    // UI snapshot remains flicker-free in SILENT during isolated preview
+    assertEquals(BaseAudioMode.SILENT, (vm.uiState.value as MainScreenUiState.Ready).audioMode)
+
+    fakePreview.finishCurrentOneShotNaturally()
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), fakeSystemController.soundState)
+    assertEquals(0, fakeSystemController.streams.ringPercent)
+
+    // 5. Transition back to SOUND -> automatically applies pending RING=78, NOTIFICATION=34, SYSTEM=45 and clears pending state
+    vm.onSelectAudioMode(BaseAudioMode.SOUND)
+    val backInSound = vm.uiState.value as MainScreenUiState.Ready
+    assertEquals(BaseAudioMode.SOUND, backInSound.audioMode)
+    assertEquals(78, backInSound.streams.ringPercent)
+    assertEquals(34, backInSound.streams.notificationPercent)
+    assertEquals(45, backInSound.streams.systemPercent)
+    assertTrue(backInSound.pendingSoundStreams.isEmpty())
+    assertEquals(false, backInSound.isStreamPendingForSound(VolumeStreamType.RING))
+  }
+
+  @Test
+  fun spec005_ac05_profileEditorIsolatedPreview_restoresHardwareVolumesAndRingerEvenAcrossRapidSwitches() = runTest {
+    fakePreferences.clearSchedules()
+    val fakePreview = FakeVolumePreviewPlayer()
+    val vm = MainScreenViewModel(repository = repository, previewPlayer = fakePreview)
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      vm.uiState.collect()
+    }
+
+    // Set baseline hardware state: SILENT Total (vibrateEnabled = false), MEDIA = 20%, ALARM = 80%, ACCESSIBILITY = 60%
+    vm.onSetVibrateEnabled(false)
+    vm.onSelectAudioMode(BaseAudioMode.SILENT)
+    vm.onStreamVolumeChange(VolumeStreamType.MEDIA, 20)
+    vm.onStreamVolumeChange(VolumeStreamType.ALARM, 80)
+    vm.onStreamVolumeChange(VolumeStreamType.ACCESSIBILITY, 60)
+
+    assertEquals(SoundState(BaseAudioMode.SILENT, false), fakeSystemController.soundState)
+    assertEquals(20, fakeSystemController.streams.mediaPercent)
+
+    // 1. Preview MEDIA at 90% in PROFILE_EDITOR -> hardware temporarily changes to 90%, UI stays SILENT Total / 20%
+    vm.onToggleStreamPreview(
+      type = VolumeStreamType.MEDIA,
+      percent = 90,
+      scope = VolumePreviewScope.PROFILE_EDITOR,
+      authorizedSilentOverride = true,
+    )
+    assertEquals(90, fakeSystemController.streams.mediaPercent)
+    assertEquals(20, (vm.uiState.value as MainScreenUiState.Ready).streams.mediaPercent)
+
+    // 2. Rapidly switch to Hold-Loop on ACCESSIBILITY at 95% before stopping MEDIA -> MEDIA restores to 20%, ACCESSIBILITY goes to 95%
+    vm.onStartStreamLoopPreview(
+      type = VolumeStreamType.ACCESSIBILITY,
+      percent = 95,
+      scope = VolumePreviewScope.PROFILE_EDITOR,
+      authorizedSilentOverride = true,
+    )
+    assertEquals(20, fakeSystemController.streams.mediaPercent)
+    assertEquals(95, fakeSystemController.streams.accessibilityPercent)
+
+    vm.onUpdateStreamLoopPercent(
+      type = VolumeStreamType.ACCESSIBILITY,
+      percent = 84,
+      scope = VolumePreviewScope.PROFILE_EDITOR,
+    )
+    assertEquals(84, fakeSystemController.streams.accessibilityPercent)
+
+    // 3. Stop preview (e.g. sheet dismiss) -> restores exact SILENT Total + MEDIA 20%, ALARM 80%, ACCESSIBILITY 60%
+    vm.onStopVolumePreview()
+    assertEquals(SoundState(BaseAudioMode.SILENT, false), fakeSystemController.soundState)
+    assertEquals(20, fakeSystemController.streams.mediaPercent)
+    assertEquals(80, fakeSystemController.streams.alarmPercent)
+    assertEquals(60, fakeSystemController.streams.accessibilityPercent)
+
+    // 4. Backup/Restore round-trip of SPEC-005 settings + bilingual labels check
+    vm.onSetVolumePreviewEnabled(false)
+    vm.onSetUseSystemSoundsForPreview(false)
+    vm.onSetSilentPreAdjustEnabled(false)
+    var exportedJson = ""
+    vm.onExportBackupJson { exportedJson = it }
+
+    vm.onResetFactoryDefaults()
+    val resetState = vm.uiState.value as MainScreenUiState.Ready
+    assertTrue(resetState.volumePreviewEnabled)
+    assertTrue(resetState.useSystemSoundsForPreview)
+    assertTrue(resetState.silentPreAdjustEnabled)
+
+    vm.onImportBackupJson(exportedJson)
+    val importedState = vm.uiState.value as MainScreenUiState.Ready
+    assertEquals(false, importedState.volumePreviewEnabled)
+    assertEquals(false, importedState.useSystemSoundsForPreview)
+    assertEquals(false, importedState.silentPreAdjustEnabled)
+
+    try {
+      AppLabels.currentLanguage = AppLanguage.PT_BR
+      assertEquals("Pré-ajuste p/ Som", AppLabels.Now.pendingForSoundBadge)
+      assertEquals("Aparelho em modo silencioso", AppLabels.Now.silentPreviewDialogTitle)
+      AppLabels.currentLanguage = AppLanguage.EN
+      assertEquals("Pre-set for Sound", AppLabels.Now.pendingForSoundBadge)
+      assertEquals("Device in silent mode", AppLabels.Now.silentPreviewDialogTitle)
+    } finally {
+      AppLabels.currentLanguage = AppLanguage.PT_BR
+    }
+  }
 }
 
 private class FakeSoundSystemController : SoundSystemController {
@@ -1691,6 +1925,22 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
     state.value = state.value.copy(secondaryDrawerExpanded = expanded)
   }
 
+  override suspend fun setVolumePreviewEnabled(enabled: Boolean) {
+    state.value = state.value.copy(volumePreviewEnabled = enabled)
+  }
+
+  override suspend fun setUseSystemSoundsForPreview(enabled: Boolean) {
+    state.value = state.value.copy(useSystemSoundsForPreview = enabled)
+  }
+
+  override suspend fun setSilentPreAdjustEnabled(enabled: Boolean) {
+    state.value = state.value.copy(silentPreAdjustEnabled = enabled)
+  }
+
+  override suspend fun setPendingSoundStreams(pending: Map<VolumeStreamType, Int>) {
+    state.value = state.value.copy(pendingSoundStreams = pending)
+  }
+
   override suspend fun resetFactoryDefaults() {
     state.value = PersistedSoundPrefs(
       themeMode = state.value.themeMode,
@@ -1730,6 +1980,9 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       streamUsageCounts = current.streamUsageCounts,
       manualStreamOrder = current.manualStreamOrder,
       secondaryDrawerExpanded = current.secondaryDrawerExpanded,
+      volumePreviewEnabled = current.volumePreviewEnabled,
+      useSystemSoundsForPreview = current.useSystemSoundsForPreview,
+      silentPreAdjustEnabled = current.silentPreAdjustEnabled,
     )
     return Json.encodeToString(payload)
   }
@@ -1766,6 +2019,9 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       streamUsageCounts = payload.streamUsageCounts.mapValues { (_, v) -> v.coerceAtLeast(0) },
       manualStreamOrder = VolumeStreamType.normalizeManualStreamOrder(payload.manualStreamOrder),
       secondaryDrawerExpanded = payload.secondaryDrawerExpanded,
+      volumePreviewEnabled = payload.volumePreviewEnabled,
+      useSystemSoundsForPreview = payload.useSystemSoundsForPreview,
+      silentPreAdjustEnabled = payload.silentPreAdjustEnabled,
     )
   }
 }

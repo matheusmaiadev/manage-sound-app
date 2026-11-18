@@ -60,12 +60,20 @@ object AppTestTags {
     const val WRITE_SETTINGS_ENABLE_BUTTON = "write_settings_enable_button"
     const val WRITE_SETTINGS_DISMISS_BUTTON = "write_settings_dismiss_button"
     const val VOLUME_STREAMS_CARD = "volume_streams_card"
+    const val VOLUME_PREVIEW_CHIP = "volume_preview_mode_chip"
     const val SECONDARY_DRAWER_TOGGLE = "volume_secondary_drawer_toggle"
+    const val SILENT_PREVIEW_CONFIRM_DIALOG = "silent_preview_confirm_dialog"
+    const val SILENT_PREVIEW_KEEP_MUTED_BUTTON = "silent_preview_keep_muted_button"
+    const val SILENT_PREVIEW_LISTEN_NOW_BUTTON = "silent_preview_listen_now_button"
 
     fun modeButton(mode: SoundMode): String = "mode_button_${mode.name}"
     fun timerChip(minutes: Int): String = "timer_chip_$minutes"
     fun streamSlider(type: VolumeStreamType): String = "slider_${type.name}"
     fun streamCapsule(type: VolumeStreamType): String = "stream_capsule_${type.name}"
+    fun streamIconButton(type: VolumeStreamType): String = "stream_icon_button_${type.name}"
+    fun streamPlayCue(type: VolumeStreamType): String = "stream_play_cue_${type.name}"
+    fun streamPreviewActiveBadge(type: VolumeStreamType): String = "stream_preview_active_${type.name}"
+    fun streamPendingBadge(type: VolumeStreamType): String = "stream_pending_badge_${type.name}"
     fun streamLinkButton(type: VolumeStreamType): String = "stream_link_button_${type.name}"
   }
 
@@ -87,8 +95,16 @@ object AppTestTags {
     fun menuDeleteItem(profileId: String): String = "profile_menu_delete_$profileId"
     fun editorSecondaryOverrideSwitch(type: VolumeStreamType): String =
       "profile_editor_override_switch_${type.name}"
+    fun editorStreamCapsule(type: VolumeStreamType): String =
+      "profile_editor_capsule_${type.name}"
     fun editorStreamSlider(type: VolumeStreamType): String =
       "profile_editor_slider_${type.name}"
+    fun editorStreamIconButton(type: VolumeStreamType): String =
+      "profile_editor_icon_button_${type.name}"
+    fun editorStreamPlayCue(type: VolumeStreamType): String =
+      "profile_editor_play_cue_${type.name}"
+    fun editorStreamPreviewActiveBadge(type: VolumeStreamType): String =
+      "profile_editor_preview_active_${type.name}"
     fun editorStreamLinkButton(type: VolumeStreamType): String =
       "profile_editor_link_button_${type.name}"
   }
@@ -200,6 +216,9 @@ object AppTestTags {
     const val SYSTEM_ZEN_RULES_SWITCH = "settings_system_zen_rules_switch"
     const val SYNC_ZEN_RULES_BUTTON = "settings_sync_zen_rules_button"
     const val RING_NOTIFICATION_LINK_SWITCH = "settings_ring_notification_link_switch"
+    const val VOLUME_PREVIEW_SWITCH = "settings_volume_preview_switch"
+    const val SYSTEM_SOUNDS_PREVIEW_SWITCH = "settings_system_sounds_preview_switch"
+    const val SILENT_PREADJUST_SWITCH = "settings_silent_preadjust_switch"
 
     fun fixedStreamsCountChip(count: Int): String = "settings_fixed_streams_count_$count"
     fun streamSortModeButton(mode: StreamSortMode): String =

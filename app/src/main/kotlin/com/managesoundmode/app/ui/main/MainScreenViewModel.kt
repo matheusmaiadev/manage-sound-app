@@ -26,6 +26,10 @@ import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.domain.model.Weekday
+import com.managesoundmode.app.system.ActiveVolumePreview
+import com.managesoundmode.app.system.FakeVolumePreviewPlayer
+import com.managesoundmode.app.system.VolumePreviewPlayer
+import com.managesoundmode.app.system.VolumePreviewScope
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
 import java.util.concurrent.atomic.AtomicReference
@@ -95,6 +99,11 @@ sealed interface MainScreenUiState {
       manualOrder = manualStreamOrder,
     ),
     val secondaryDrawerExpanded: Boolean = false,
+    val volumePreviewEnabled: Boolean = true,
+    val useSystemSoundsForPreview: Boolean = true,
+    val silentPreAdjustEnabled: Boolean = true,
+    val pendingSoundStreams: Map<VolumeStreamType, Int> = emptyMap(),
+    val activeVolumePreview: ActiveVolumePreview? = null,
   ) : MainScreenUiState {
     val audioMode: BaseAudioMode
       get() = currentSoundState.audioMode
@@ -112,6 +121,16 @@ sealed interface MainScreenUiState {
 
     fun minPercentFor(type: VolumeStreamType): Int =
       (streamMinPercents[type] ?: 0).coerceIn(0, 100)
+
+    fun displayedStreamPercent(type: VolumeStreamType): Int =
+      if (audioMode == BaseAudioMode.SILENT && pendingSoundStreams.containsKey(type)) {
+        (pendingSoundStreams[type] ?: streams.percentFor(type)).coerceIn(minPercentFor(type), 100)
+      } else {
+        streams.percentFor(type)
+      }
+
+    fun isStreamPendingForSound(type: VolumeStreamType): Boolean =
+      audioMode == BaseAudioMode.SILENT && pendingSoundStreams.containsKey(type)
   }
 
   data class Error(val message: String) : MainScreenUiState
@@ -119,25 +138,43 @@ sealed interface MainScreenUiState {
 
 class MainScreenViewModel(
   private val repository: SoundModeRepository,
+  private val previewPlayer: VolumePreviewPlayer = FakeVolumePreviewPlayer(),
 ) : ViewModel() {
+
+  private data class TransientUiOverlay(
+    val feedbackMessage: String?,
+    val showWritePrompt: Boolean,
+    val activePreview: ActiveVolumePreview?,
+  )
 
   private val feedbackMessage = MutableStateFlow<String?>(null)
   private val writeSettingsPromptRequested = MutableStateFlow(false)
   private val latchedMostUsedStreams = AtomicReference<List<VolumeStreamType>?>(null)
 
+  private val transientOverlayFlow = combine(
+    feedbackMessage,
+    writeSettingsPromptRequested,
+    previewPlayer.previewState,
+  ) { message, showWritePrompt, activePreview ->
+    TransientUiOverlay(
+      feedbackMessage = message,
+      showWritePrompt = showWritePrompt,
+      activePreview = activePreview,
+    )
+  }
+
   val uiState: StateFlow<MainScreenUiState> = combine(
     repository.snapshotStream,
     repository.profilesStream,
     repository.preferencesStream,
-    feedbackMessage,
-    writeSettingsPromptRequested,
-  ) { snapshot: DeviceSoundSnapshot, profiles: List<SoundProfile>, prefs: PersistedSoundPrefs, message: String?, showWritePrompt: Boolean ->
+    transientOverlayFlow,
+  ) { snapshot: DeviceSoundSnapshot, profiles: List<SoundProfile>, prefs: PersistedSoundPrefs, overlay: TransientUiOverlay ->
     val resolvedLanguage = runCatching { AppLanguage.valueOf(prefs.appLanguageCode) }
       .getOrDefault(AppLanguage.PT_BR)
     if (AppLabels.currentLanguage != resolvedLanguage) {
       AppLabels.currentLanguage = resolvedLanguage
     }
-    if (snapshot.canWriteSystemSettings && showWritePrompt) {
+    if (snapshot.canWriteSystemSettings && overlay.showWritePrompt) {
       writeSettingsPromptRequested.value = false
     }
 
@@ -160,11 +197,11 @@ class MainScreenViewModel(
       streams = snapshot.streams,
       hasDndPermission = snapshot.hasDndPermission,
       canWriteSystemSettings = snapshot.canWriteSystemSettings,
-      showWriteSettingsPrompt = showWritePrompt && !snapshot.canWriteSystemSettings,
+      showWriteSettingsPrompt = overlay.showWritePrompt && !snapshot.canWriteSystemSettings,
       profiles = profiles,
       activeProfileId = snapshot.activeProfileId,
       activeTimer = snapshot.activeTimer,
-      statusMessage = message,
+      statusMessage = overlay.feedbackMessage,
       canScheduleExactAlarms = snapshot.canScheduleExactAlarms,
       hasLocationPermission = snapshot.hasLocationPermission,
       hasBackgroundLocationPermission = snapshot.hasBackgroundLocationPermission,
@@ -204,6 +241,11 @@ class MainScreenViewModel(
       manualStreamOrder = normalizedManualOrder,
       orderedStreams = orderedStreams,
       secondaryDrawerExpanded = prefs.secondaryDrawerExpanded,
+      volumePreviewEnabled = prefs.volumePreviewEnabled,
+      useSystemSoundsForPreview = prefs.useSystemSoundsForPreview,
+      silentPreAdjustEnabled = prefs.silentPreAdjustEnabled,
+      pendingSoundStreams = prefs.pendingSoundStreams,
+      activeVolumePreview = overlay.activePreview,
     ) as MainScreenUiState
   }
     .catch { throwable ->
@@ -254,6 +296,7 @@ class MainScreenViewModel(
   fun onSelectMode(mode: SoundMode) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      onStopVolumePreview()
       repository.setSoundMode(mode)
         .onSuccess {
           feedbackMessage.value = "Modo alterado para ${mode.title}"
@@ -267,6 +310,7 @@ class MainScreenViewModel(
   fun onSelectAudioMode(audioMode: BaseAudioMode) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      onStopVolumePreview()
       repository.setBaseAudioMode(audioMode)
         .onSuccess { applied ->
           feedbackMessage.value = AppLabels.Now.modeChangedFeedback(applied)
@@ -389,9 +433,202 @@ class MainScreenViewModel(
     }
   }
 
+  fun onToggleVolumePreviewQuick() {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      val currentEnabled = (uiState.value as? MainScreenUiState.Ready)?.volumePreviewEnabled
+        ?: repository.preferencesStream.first().volumePreviewEnabled
+      val nextEnabled = !currentEnabled
+      if (!nextEnabled) {
+        onStopVolumePreview()
+      }
+      repository.setVolumePreviewEnabled(nextEnabled)
+        .onSuccess {
+          feedbackMessage.value = if (nextEnabled) {
+            AppLabels.Now.volumePreviewEnabledFeedback
+          } else {
+            AppLabels.Now.volumePreviewMutedFeedback
+          }
+        }
+    }
+  }
+
+  fun onSetVolumePreviewEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      if (!enabled) {
+        onStopVolumePreview()
+      }
+      repository.setVolumePreviewEnabled(enabled)
+    }
+  }
+
+  fun onSetUseSystemSoundsForPreview(enabled: Boolean) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      repository.setUseSystemSoundsForPreview(enabled)
+    }
+  }
+
+  fun onSetSilentPreAdjustEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      repository.setSilentPreAdjustEnabled(enabled)
+    }
+  }
+
+  fun onToggleStreamPreview(
+    type: VolumeStreamType,
+    percent: Int,
+    scope: VolumePreviewScope = VolumePreviewScope.NOW_TAB,
+    authorizedSilentOverride: Boolean = false,
+  ) {
+    viewModelScope.launch {
+      val requiredPermission = if (scope == VolumePreviewScope.PROFILE_EDITOR) {
+        AppPermission.MANAGE_PROFILES
+      } else {
+        AppPermission.CHANGE_SOUND_AND_TIMER
+      }
+      if (!checkAccessPermission(requiredPermission)) return@launch
+
+      val currentActive = previewPlayer.previewState.value
+      if (currentActive != null && currentActive.streamType == type && currentActive.scope == scope) {
+        onStopVolumePreview()
+        return@launch
+      }
+
+      val readyState = uiState.value as? MainScreenUiState.Ready
+      val prefs = if (readyState == null) repository.preferencesStream.first() else null
+      val previewEnabled = readyState?.volumePreviewEnabled ?: prefs?.volumePreviewEnabled ?: true
+      if (scope == VolumePreviewScope.NOW_TAB && !previewEnabled && !authorizedSilentOverride) {
+        return@launch
+      }
+
+      val useSystemSounds = readyState?.useSystemSoundsForPreview
+        ?: prefs?.useSystemSoundsForPreview
+        ?: true
+      val isSilentMode = (readyState?.audioMode ?: BaseAudioMode.SOUND) == BaseAudioMode.SILENT
+      val clampedPercent = percent.coerceIn(readyState?.minPercentFor(type) ?: 0, 100)
+
+      if (previewPlayer.previewState.value != null) {
+        onStopVolumePreview()
+      }
+
+      if (scope == VolumePreviewScope.PROFILE_EDITOR || (isSilentMode && authorizedSilentOverride)) {
+        repository.beginIsolatedHardwarePreview(
+          streamType = type,
+          percent = clampedPercent,
+          forceAudibleInSilent = true,
+        )
+      } else if (!isSilentMode) {
+        repository.applyLiveStreamVolumeDirect(type, clampedPercent)
+      } else {
+        return@launch
+      }
+
+      previewPlayer.playSingle(
+        streamType = type,
+        percent = clampedPercent,
+        useSystemSounds = useSystemSounds,
+        scope = scope,
+        onStopped = { repository.endIsolatedHardwarePreview() },
+      )
+    }
+  }
+
+  fun onStartStreamLoopPreview(
+    type: VolumeStreamType,
+    percent: Int,
+    scope: VolumePreviewScope = VolumePreviewScope.NOW_TAB,
+    authorizedSilentOverride: Boolean = false,
+  ) {
+    viewModelScope.launch {
+      val requiredPermission = if (scope == VolumePreviewScope.PROFILE_EDITOR) {
+        AppPermission.MANAGE_PROFILES
+      } else {
+        AppPermission.CHANGE_SOUND_AND_TIMER
+      }
+      if (!checkAccessPermission(requiredPermission)) return@launch
+
+      val readyState = uiState.value as? MainScreenUiState.Ready
+      val prefs = if (readyState == null) repository.preferencesStream.first() else null
+      val previewEnabled = readyState?.volumePreviewEnabled ?: prefs?.volumePreviewEnabled ?: true
+      if (scope == VolumePreviewScope.NOW_TAB && !previewEnabled && !authorizedSilentOverride) {
+        return@launch
+      }
+
+      val useSystemSounds = readyState?.useSystemSoundsForPreview
+        ?: prefs?.useSystemSoundsForPreview
+        ?: true
+      val isSilentMode = (readyState?.audioMode ?: BaseAudioMode.SOUND) == BaseAudioMode.SILENT
+      val clampedPercent = percent.coerceIn(readyState?.minPercentFor(type) ?: 0, 100)
+
+      if (previewPlayer.previewState.value != null) {
+        onStopVolumePreview()
+      }
+
+      if (scope == VolumePreviewScope.PROFILE_EDITOR || (isSilentMode && authorizedSilentOverride)) {
+        repository.beginIsolatedHardwarePreview(
+          streamType = type,
+          percent = clampedPercent,
+          forceAudibleInSilent = true,
+        )
+      } else if (!isSilentMode) {
+        repository.applyLiveStreamVolumeDirect(type, clampedPercent)
+      } else {
+        return@launch
+      }
+
+      previewPlayer.startLoop(
+        streamType = type,
+        percent = clampedPercent,
+        useSystemSounds = useSystemSounds,
+        scope = scope,
+        onStopped = { repository.endIsolatedHardwarePreview() },
+      )
+    }
+  }
+
+  fun onUpdateStreamLoopPercent(
+    type: VolumeStreamType,
+    percent: Int,
+    scope: VolumePreviewScope = VolumePreviewScope.NOW_TAB,
+  ) {
+    val readyState = uiState.value as? MainScreenUiState.Ready
+    val clampedPercent = percent.coerceIn(readyState?.minPercentFor(type) ?: 0, 100)
+    previewPlayer.updateLivePercent(clampedPercent)
+    if (scope == VolumePreviewScope.PROFILE_EDITOR || readyState?.audioMode == BaseAudioMode.SILENT) {
+      repository.updateIsolatedHardwarePreviewPercent(type, clampedPercent)
+    } else {
+      repository.applyLiveStreamVolumeDirect(type, clampedPercent)
+      if (readyState?.ringNotificationLinked == true &&
+        (type == VolumeStreamType.RING || type == VolumeStreamType.NOTIFICATION)
+      ) {
+        val sibling = if (type == VolumeStreamType.RING) {
+          VolumeStreamType.NOTIFICATION
+        } else {
+          VolumeStreamType.RING
+        }
+        repository.applyLiveStreamVolumeDirect(
+          sibling,
+          clampedPercent.coerceIn(readyState.minPercentFor(sibling), 100),
+        )
+      }
+    }
+  }
+
+  fun onStopVolumePreview() {
+    try {
+      previewPlayer.stop()
+    } finally {
+      repository.endIsolatedHardwarePreview()
+    }
+  }
+
   fun onActivateProfile(profile: SoundProfile) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      onStopVolumePreview()
       repository.activateProfile(profile)
         .onSuccess {
           feedbackMessage.value = "Perfil '${profile.name}' ativado"
@@ -471,6 +708,9 @@ class MainScreenViewModel(
   ) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_PROFILES)) return@launch
+      if (applyImmediately) {
+        onStopVolumePreview()
+      }
       repository.upsertProfile(profile, applyImmediately = applyImmediately)
         .onSuccess { saved ->
           if (showFeedback) {
@@ -944,12 +1184,20 @@ class MainScreenViewModel(
     feedbackMessage.value = null
   }
 
+  override fun onCleared() {
+    onStopVolumePreview()
+    super.onCleared()
+  }
+
   companion object {
     val Factory: ViewModelProvider.Factory = viewModelFactory {
       initializer {
         val application =
           this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as ManageSoundApplication
-        MainScreenViewModel(repository = application.container.soundModeRepository)
+        MainScreenViewModel(
+          repository = application.container.soundModeRepository,
+          previewPlayer = application.container.volumePreviewPlayer,
+        )
       }
     }
   }

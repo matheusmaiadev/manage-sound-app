@@ -12,6 +12,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +44,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
@@ -49,8 +52,10 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RingVolume
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
@@ -77,29 +82,42 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.managesoundmode.app.domain.model.BaseAudioMode
@@ -108,6 +126,9 @@ import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.system.ActiveVolumePreview
+import com.managesoundmode.app.system.VolumePreviewKind
+import com.managesoundmode.app.system.VolumePreviewScope
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppTestTags
 import com.managesoundmode.app.ui.theme.onActivePillColor
@@ -116,7 +137,10 @@ import com.managesoundmode.app.ui.theme.tonalAccentColor
 import com.managesoundmode.app.ui.theme.tonalContainerColor
 import com.managesoundmode.app.ui.theme.zenithOnActivePillColor
 import com.managesoundmode.app.ui.theme.zenithVibrateAccentColor
+import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Formato de cartão orgânico ZENITH (cantos suaves atmosféricos).
@@ -379,10 +403,15 @@ fun M3CheckSwitch(
   )
 }
 
+private const val PREVIEW_HOLD_THRESHOLD_MS = 300L
+private const val PREVIEW_DOUBLE_TAP_WINDOW_MS = 320L
+private const val PREVIEW_PLAY_CUE_DURATION_MS = 4_500L
+
 /**
  * Cápsula Líquida de Volume ZENITH (`Zenith Capsule Slider`).
  * Exibe preenchimento líquido proporcional ao volume dentro de uma cápsula arredondada,
- * com badge circular do canal, percentual tabular e slider tátil integrado.
+ * com badge circular interativo (`1×` sample, `Press & Hold` loop ao vivo), suporte a `2×` duplo
+ * toque e `Press & Hold` na cápsula sem atrasar o arraste normal mudo, além do Cue `PlayArrow` por 4,5s.
  */
 @Composable
 fun PillVolumeSliderRow(
@@ -396,36 +425,89 @@ fun PillVolumeSliderRow(
   microDescription: String? = type.microDescription,
   isLinked: Boolean? = null,
   onToggleLink: (() -> Unit)? = null,
+  isPendingForSound: Boolean = false,
+  activePreviewKind: VolumePreviewKind? = null,
+  onSingleTapPreview: ((Int) -> Unit)? = null,
+  onDoubleTapPreview: ((Int) -> Unit)? = null,
+  onStartHoldPreview: ((Int) -> Unit)? = null,
+  onHoldLivePercentChange: ((Int) -> Unit)? = null,
+  onStopHoldPreview: ((Int, Boolean) -> Unit)? = null,
   externalPreviewPercent: Int? = null,
   onLivePreviewChange: ((Int?) -> Unit)? = null,
   capsuleTestTag: String = AppTestTags.Now.streamCapsule(type),
   sliderTestTag: String = AppTestTags.Now.streamSlider(type),
+  iconButtonTestTag: String = AppTestTags.Now.streamIconButton(type),
+  playCueTestTag: String = AppTestTags.Now.streamPlayCue(type),
+  previewActiveBadgeTestTag: String = AppTestTags.Now.streamPreviewActiveBadge(type),
+  pendingBadgeTestTag: String = AppTestTags.Now.streamPendingBadge(type),
   linkButtonTestTag: String = AppTestTags.Now.streamLinkButton(type),
 ) {
+  val haptics = LocalHapticFeedback.current
   val clampedMin = minPercent.coerceIn(0, 99)
   val floorFloat = clampedMin.toFloat()
   var sliderValue by remember {
     mutableFloatStateOf(percent.coerceIn(clampedMin, 100).toFloat())
   }
   var isDragging by remember { mutableStateOf(false) }
+  var isHoldLooping by remember { mutableStateOf(false) }
+  var playCueTriggerCount by remember { mutableIntStateOf(0) }
+  var showPlayCue by remember { mutableStateOf(false) }
+
+  var capsuleRootPos by remember { mutableStateOf(Offset.Zero) }
+  var capsuleWidthPx by remember { mutableFloatStateOf(0f) }
+  var iconRootRect by remember { mutableStateOf(Rect.Zero) }
+  var linkRootRect by remember { mutableStateOf(Rect.Zero) }
 
   LaunchedEffect(percent, clampedMin) {
-    if (!isDragging) {
+    if (!isDragging && !isHoldLooping) {
       sliderValue = percent.coerceIn(clampedMin, 100).toFloat()
     }
   }
 
-  val displayValue = if (!isDragging && externalPreviewPercent != null) {
+  LaunchedEffect(playCueTriggerCount) {
+    if (playCueTriggerCount > 0) {
+      showPlayCue = true
+      delay(PREVIEW_PLAY_CUE_DURATION_MS)
+      showPlayCue = false
+    }
+  }
+
+  val displayValue = if (!isDragging && !isHoldLooping && externalPreviewPercent != null) {
     externalPreviewPercent.coerceIn(clampedMin, 100).toFloat()
   } else {
     sliderValue.coerceIn(floorFloat, 100f)
   }
 
   val currentPercent = displayValue.roundToInt().coerceIn(clampedMin, 100)
+  val isPreviewPlaying = activePreviewKind != null
+  val isCueVisible = showPlayCue && !isPreviewPlaying
+
+  val latestPercent by rememberUpdatedState(currentPercent)
+  val latestClampedMin by rememberUpdatedState(clampedMin)
+  val latestFloorFloat by rememberUpdatedState(floorFloat)
+  val latestOnSingleTap by rememberUpdatedState(onSingleTapPreview)
+  val latestOnDoubleTap by rememberUpdatedState(onDoubleTapPreview)
+  val latestOnStartHold by rememberUpdatedState(onStartHoldPreview)
+  val latestOnHoldLivePercent by rememberUpdatedState(onHoldLivePercentChange)
+  val latestOnStopHold by rememberUpdatedState(onStopHoldPreview)
+  val latestOnLivePreviewChange by rememberUpdatedState(onLivePreviewChange)
+  val latestOnValueChangeFinished by rememberUpdatedState(onValueChangeFinished)
+
+  val liquidAlphaScale = if (isPendingForSound) 0.55f else 1f
   val animatedFillFraction by animateFloatAsState(
     targetValue = (currentPercent / 100f).coerceIn(0f, 1f),
     animationSpec = tween(durationMillis = 150),
     label = "zenithCapsuleFill_${type.name}",
+  )
+
+  val capsuleBorderColor by animateColorAsState(
+    targetValue = when {
+      isPreviewPlaying -> accentColor
+      isCueVisible -> accentColor.copy(alpha = 0.65f)
+      else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+    },
+    animationSpec = tween(durationMillis = 180),
+    label = "zenithCapsuleBorder_${type.name}",
   )
 
   val capsuleShape = RoundedCornerShape(20.dp)
@@ -433,13 +515,123 @@ fun PillVolumeSliderRow(
   Box(
     modifier = modifier
       .fillMaxWidth()
+      .onGloballyPositioned { coords ->
+        capsuleRootPos = coords.positionInRoot()
+        capsuleWidthPx = coords.size.width.toFloat()
+      }
       .clip(capsuleShape)
       .background(MaterialTheme.colorScheme.surfaceContainerHigh)
       .border(
-        width = 1.dp,
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+        width = if (isPreviewPlaying) 1.5.dp else 1.dp,
+        color = capsuleBorderColor,
         shape = capsuleShape,
       )
+      .pointerInput(type) {
+        val touchSlop = viewConfiguration.touchSlop
+        val childHitPaddingPx = 4.dp.toPx()
+        var lastTapUpTimeMillis = 0L
+        var lastTapPosition = Offset.Zero
+
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+          val rootDown = capsuleRootPos + down.position
+          val hitIcon = iconRootRect != Rect.Zero && iconRootRect.inflate(childHitPaddingPx).contains(rootDown)
+          val hitLink = linkRootRect != Rect.Zero && linkRootRect.inflate(childHitPaddingPx).contains(rootDown)
+          if (hitIcon || hitLink) {
+            return@awaitEachGesture
+          }
+
+          val downTimeMillis = down.uptimeMillis
+          val downPos = down.position
+          val isSecondTapCandidate =
+            (downTimeMillis - lastTapUpTimeMillis) in 1L..PREVIEW_DOUBLE_TAP_WINDOW_MS &&
+              (downPos - lastTapPosition).getDistance() <= touchSlop * 3.2f
+
+          var exceededSlop = false
+          var releasedCleanly = false
+          var upTimeMillis = downTimeMillis
+
+          val finishedBeforeHold = withTimeoutOrNull(PREVIEW_HOLD_THRESHOLD_MS) {
+            while (true) {
+              val event = awaitPointerEvent(PointerEventPass.Initial)
+              val change = event.changes.firstOrNull { it.id == down.id }
+                ?: event.changes.firstOrNull()
+                ?: break
+              if ((change.position - downPos).getDistance() > touchSlop) {
+                exceededSlop = true
+                break
+              }
+              if (!change.pressed) {
+                releasedCleanly = true
+                upTimeMillis = change.uptimeMillis
+                break
+              }
+            }
+            true
+          }
+
+          when {
+            exceededSlop -> {
+              lastTapUpTimeMillis = 0L
+            }
+
+            finishedBeforeHold == true && releasedCleanly -> {
+              if (isSecondTapCandidate && latestOnDoubleTap != null) {
+                lastTapUpTimeMillis = 0L
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                latestOnDoubleTap?.invoke(latestPercent)
+              } else {
+                lastTapUpTimeMillis = upTimeMillis
+                lastTapPosition = downPos
+              }
+            }
+
+            finishedBeforeHold == null && latestOnStartHold != null -> {
+              lastTapUpTimeMillis = 0L
+              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+              isHoldLooping = true
+              var didDragInHold = false
+              var lastX = downPos.x
+              val usableWidth = (capsuleWidthPx - 28.dp.toPx()).coerceAtLeast(80f)
+
+              try {
+                latestOnStartHold?.invoke(latestPercent)
+                while (true) {
+                  val event = awaitPointerEvent(PointerEventPass.Initial)
+                  val activeChange = event.changes.firstOrNull { it.id == down.id }
+                    ?: event.changes.firstOrNull()
+                  if (activeChange == null || !activeChange.pressed) {
+                    break
+                  }
+                  val dx = activeChange.position.x - lastX
+                  if (abs(dx) > 1f && capsuleWidthPx > 0f) {
+                    lastX = activeChange.position.x
+                    didDragInHold = true
+                    if (!isDragging) {
+                      val nextVal = (sliderValue + (dx / usableWidth) * 100f)
+                        .coerceIn(latestFloorFloat, 100f)
+                      sliderValue = nextVal
+                      val nextInt = nextVal.roundToInt().coerceIn(latestClampedMin, 100)
+                      latestOnLivePreviewChange?.invoke(nextInt)
+                      latestOnHoldLivePercent?.invoke(nextInt)
+                    }
+                  }
+                }
+              } finally {
+                val finalInt = sliderValue.roundToInt().coerceIn(latestClampedMin, 100)
+                isHoldLooping = false
+                if (!isDragging) {
+                  latestOnLivePreviewChange?.invoke(null)
+                }
+                latestOnStopHold?.invoke(finalInt, didDragInHold)
+                if (didDragInHold && !isDragging) {
+                  latestOnValueChangeFinished(finalInt)
+                }
+              }
+            }
+          }
+        }
+      }
       .testTag(capsuleTestTag),
   ) {
     // Camada de preenchimento líquido interno (Zenith Liquid Fill)
@@ -454,8 +646,8 @@ fun PillVolumeSliderRow(
           .background(
             brush = Brush.horizontalGradient(
               colors = listOf(
-                accentColor.copy(alpha = 0.20f),
-                accentColor.copy(alpha = 0.08f),
+                accentColor.copy(alpha = 0.20f * liquidAlphaScale),
+                accentColor.copy(alpha = 0.08f * liquidAlphaScale),
               ),
             ),
           ),
@@ -479,20 +671,142 @@ fun PillVolumeSliderRow(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+          val badgeBgColor by animateColorAsState(
+            targetValue = when {
+              isPreviewPlaying -> accentColor
+              isCueVisible -> accentColor.copy(alpha = 0.26f)
+              else -> accentColor.copy(alpha = 0.16f)
+            },
+            animationSpec = tween(durationMillis = 160),
+            label = "zenithIconBadgeBg_${type.name}",
+          )
+          val badgeIconTint = if (isPreviewPlaying) {
+            zenithOnActivePillColor()
+          } else {
+            accentColor
+          }
+          val badgeIconVector = when {
+            activePreviewKind == VolumePreviewKind.HOLD_LOOP -> Icons.Default.GraphicEq
+            activePreviewKind == VolumePreviewKind.ONE_SHOT -> Icons.Default.Stop
+            isCueVisible -> Icons.Default.PlayArrow
+            else -> icon
+          }
+
           Box(
             modifier = Modifier
-              .size(32.dp)
+              .size(34.dp)
+              .onGloballyPositioned { coords ->
+                iconRootRect = Rect(coords.positionInRoot(), coords.size.toSize())
+              }
               .clip(CircleShape)
-              .background(accentColor.copy(alpha = 0.16f)),
+              .background(badgeBgColor)
+              .then(
+                if (isCueVisible || isPreviewPlaying) {
+                  Modifier.border(
+                    width = 1.5.dp,
+                    color = accentColor,
+                    shape = CircleShape,
+                  )
+                } else {
+                  Modifier
+                },
+              )
+              .semantics(mergeDescendants = false) {
+                role = Role.Button
+                contentDescription = AppLabels.Now.streamPreviewIconContentDescription(
+                  label = type.label,
+                  isPlaying = isPreviewPlaying,
+                )
+                onClick {
+                  latestOnSingleTap?.invoke(latestPercent)
+                  true
+                }
+              }
+              .pointerInput(type) {
+                val usablePadPx = 28.dp.toPx()
+                awaitEachGesture {
+                  val down = awaitFirstDown(requireUnconsumed = false)
+                  down.consume()
+
+                  val tappedCleanly = withTimeoutOrNull(PREVIEW_HOLD_THRESHOLD_MS) {
+                    while (true) {
+                      val event = awaitPointerEvent()
+                      val active = event.changes.firstOrNull { it.id == down.id }
+                        ?: event.changes.firstOrNull()
+                        ?: break
+                      active.consume()
+                      if (!active.pressed) {
+                        break
+                      }
+                    }
+                    true
+                  }
+
+                  if (tappedCleanly == true) {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    latestOnSingleTap?.invoke(latestPercent)
+                  } else if (latestOnStartHold != null) {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    isHoldLooping = true
+                    var didDragInHold = false
+                    var lastX = (iconRootRect.left - capsuleRootPos.x) + down.position.x
+                    val usableWidth = (capsuleWidthPx - usablePadPx).coerceAtLeast(80f)
+
+                    try {
+                      latestOnStartHold?.invoke(latestPercent)
+                      while (true) {
+                        val event = awaitPointerEvent()
+                        val active = event.changes.firstOrNull { it.id == down.id }
+                          ?: event.changes.firstOrNull()
+                        if (active == null || !active.pressed) {
+                          event.changes.forEach { it.consume() }
+                          break
+                        }
+                        val currentCapsuleX = (iconRootRect.left - capsuleRootPos.x) + active.position.x
+                        val dx = currentCapsuleX - lastX
+                        if (abs(dx) > 1f && capsuleWidthPx > 0f) {
+                          lastX = currentCapsuleX
+                          didDragInHold = true
+                          val nextVal = (sliderValue + (dx / usableWidth) * 100f)
+                            .coerceIn(latestFloorFloat, 100f)
+                          sliderValue = nextVal
+                          val nextInt = nextVal.roundToInt().coerceIn(latestClampedMin, 100)
+                          latestOnLivePreviewChange?.invoke(nextInt)
+                          latestOnHoldLivePercent?.invoke(nextInt)
+                        }
+                        active.consume()
+                      }
+                    } finally {
+                      val finalInt = sliderValue.roundToInt().coerceIn(latestClampedMin, 100)
+                      isHoldLooping = false
+                      latestOnLivePreviewChange?.invoke(null)
+                      latestOnStopHold?.invoke(finalInt, didDragInHold)
+                      if (didDragInHold) {
+                        latestOnValueChangeFinished(finalInt)
+                      }
+                    }
+                  }
+                }
+              }
+              .testTag(iconButtonTestTag),
             contentAlignment = Alignment.Center,
           ) {
             Icon(
-              imageVector = icon,
+              imageVector = badgeIconVector,
               contentDescription = null,
-              tint = accentColor,
-              modifier = Modifier.size(16.dp),
+              tint = badgeIconTint,
+              modifier = Modifier
+                .size(17.dp)
+                .then(
+                  when {
+                    isPreviewPlaying -> Modifier.testTag(previewActiveBadgeTestTag)
+                    isCueVisible -> Modifier.testTag(playCueTestTag)
+                    else -> Modifier
+                  },
+                ),
             )
           }
+
           Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
               text = type.label,
@@ -502,22 +816,69 @@ fun PillVolumeSliderRow(
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
-            if (!microDescription.isNullOrBlank()) {
-              Text(
-                text = microDescription,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
+            val resolvedSubtitle = when {
+              activePreviewKind == VolumePreviewKind.HOLD_LOOP -> AppLabels.Now.previewLoopingSubtitle
+              activePreviewKind == VolumePreviewKind.ONE_SHOT -> AppLabels.Now.previewPlayingSubtitle
+              isCueVisible -> AppLabels.Now.previewCueSubtitle
+              else -> microDescription
+            }
+            if (!resolvedSubtitle.isNullOrBlank()) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+              ) {
+                if (isPreviewPlaying) {
+                  Icon(
+                    imageVector = Icons.Default.GraphicEq,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(12.dp),
+                  )
+                }
+                Text(
+                  text = resolvedSubtitle,
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = if (isPreviewPlaying || isCueVisible) {
+                    FontWeight.SemiBold
+                  } else {
+                    FontWeight.Normal
+                  },
+                  color = if (isPreviewPlaying || isCueVisible) {
+                    accentColor
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
             }
           }
         }
 
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+          if (isPendingForSound) {
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = accentColor.copy(alpha = 0.14f),
+              border = BorderStroke(1.dp, accentColor.copy(alpha = 0.38f)),
+              modifier = Modifier.testTag(pendingBadgeTestTag),
+            ) {
+              Text(
+                text = AppLabels.Now.pendingForSoundBadge,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = accentColor,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+              )
+            }
+          }
+
           if (isLinked != null && onToggleLink != null) {
             Surface(
               shape = CircleShape,
@@ -533,6 +894,9 @@ fun PillVolumeSliderRow(
               },
               modifier = Modifier
                 .size(26.dp)
+                .onGloballyPositioned { coords ->
+                  linkRootRect = Rect(coords.positionInRoot(), coords.size.toSize())
+                }
                 .clip(CircleShape)
                 .clickable(onClick = onToggleLink)
                 .semantics {
@@ -561,7 +925,7 @@ fun PillVolumeSliderRow(
             color = if (currentPercent == 0) {
               MaterialTheme.colorScheme.surfaceContainerHighest
             } else {
-              accentColor.copy(alpha = 0.16f)
+              accentColor.copy(alpha = if (isPendingForSound) 0.12f else 0.16f)
             },
           ) {
             Text(
@@ -582,10 +946,19 @@ fun PillVolumeSliderRow(
       Slider(
         value = displayValue,
         onValueChange = { raw ->
+          val wasDragging = isDragging
           isDragging = true
           val clamped = raw.coerceIn(floorFloat, 100f)
+          val nextInt = clamped.roundToInt().coerceIn(clampedMin, 100)
+          val valueMoved = nextInt != sliderValue.roundToInt() || !wasDragging
           sliderValue = clamped
-          onLivePreviewChange?.invoke(clamped.roundToInt())
+          if (valueMoved && !isHoldLooping) {
+            playCueTriggerCount++
+          }
+          onLivePreviewChange?.invoke(nextInt)
+          if (isHoldLooping) {
+            onHoldLivePercentChange?.invoke(nextInt)
+          }
         },
         onValueChangeFinished = {
           isDragging = false
@@ -594,8 +967,8 @@ fun PillVolumeSliderRow(
         },
         valueRange = floorFloat..100f,
         colors = SliderDefaults.colors(
-          thumbColor = accentColor,
-          activeTrackColor = accentColor,
+          thumbColor = accentColor.copy(alpha = if (isPendingForSound) 0.85f else 1f),
+          activeTrackColor = accentColor.copy(alpha = if (isPendingForSound) 0.72f else 1f),
           inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         ),
         modifier = Modifier
@@ -604,6 +977,69 @@ fun PillVolumeSliderRow(
       )
     }
   }
+}
+
+/**
+ * Diálogo compacto de segurança acústica quando o aparelho está em modo Silencioso/Vibrar
+ * e o usuário aciona um gesto de preview sonoro (SPEC-005 / Issues #3 & #4).
+ */
+@Composable
+fun SilentPreviewConfirmDialog(
+  onKeepMuted: () -> Unit,
+  onListenNow: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onKeepMuted,
+    modifier = Modifier.testTag(AppTestTags.Now.SILENT_PREVIEW_CONFIRM_DIALOG),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    icon = {
+      Box(
+        modifier = Modifier
+          .size(44.dp)
+          .clip(CircleShape)
+          .background(BaseAudioMode.SILENT.tonalContainerColor()),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Shield,
+          contentDescription = null,
+          tint = BaseAudioMode.SILENT.tonalAccentColor(),
+          modifier = Modifier.size(22.dp),
+        )
+      }
+    },
+    title = {
+      Text(
+        text = AppLabels.Now.silentPreviewDialogTitle,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+      )
+    },
+    text = {
+      Text(
+        text = AppLabels.Now.silentPreviewDialogBody,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    },
+    confirmButton = {
+      Button(
+        onClick = onListenNow,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.testTag(AppTestTags.Now.SILENT_PREVIEW_LISTEN_NOW_BUTTON),
+      ) {
+        Text(AppLabels.Now.silentPreviewListenNowButton, fontWeight = FontWeight.Bold)
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onKeepMuted,
+        modifier = Modifier.testTag(AppTestTags.Now.SILENT_PREVIEW_KEEP_MUTED_BUTTON),
+      ) {
+        Text(AppLabels.Now.silentPreviewKeepMutedButton)
+      }
+    },
+  )
 }
 
 /**
@@ -620,6 +1056,11 @@ fun ProfileEditorBottomSheet(
   defaultSoundState: SoundState = SoundState.fromLegacyMode(defaultMode),
   streamMinPercents: Map<VolumeStreamType, Int> = emptyMap(),
   ringNotificationLinkedDefault: Boolean = true,
+  activeVolumePreview: ActiveVolumePreview? = null,
+  onToggleEditorStreamPreview: (VolumeStreamType, Int) -> Unit = { _, _ -> },
+  onStartEditorStreamLoop: (VolumeStreamType, Int) -> Unit = { _, _ -> },
+  onUpdateEditorStreamLoopPercent: (VolumeStreamType, Int) -> Unit = { _, _ -> },
+  onStopEditorStreamPreview: () -> Unit = {},
   onSaveProfile: (profile: SoundProfile, applyNow: Boolean) -> Unit,
   onAutoSaveProfile: (profile: SoundProfile) -> Unit = {},
   onDeleteProfile: ((profileId: String) -> Unit)? = null,
@@ -627,6 +1068,14 @@ fun ProfileEditorBottomSheet(
 ) {
   val haptics = LocalHapticFeedback.current
   val isEditing = initialProfile != null
+  var silentPreviewAuthorizedInSession by rememberSaveable { mutableStateOf(false) }
+  var pendingSilentPreviewRequest by remember { mutableStateOf<Pair<VolumeStreamType, Int>?>(null) }
+
+  DisposableEffect(Unit) {
+    onDispose {
+      onStopEditorStreamPreview()
+    }
+  }
   var name by rememberSaveable { mutableStateOf(initialProfile?.name ?: "") }
   var iconKey by rememberSaveable { mutableStateOf(initialProfile?.iconKey ?: "work") }
   var selectedAudioMode by rememberSaveable {
@@ -764,8 +1213,48 @@ fun ProfileEditorBottomSheet(
     }
   }
 
+  fun editorPreviewKindFor(type: VolumeStreamType): VolumePreviewKind? =
+    activeVolumePreview
+      ?.takeIf { it.scope == VolumePreviewScope.PROFILE_EDITOR && it.streamType == type }
+      ?.kind
+
+  fun requestEditorTapPreview(type: VolumeStreamType, targetPercent: Int) {
+    val isCurrentlyPlayingThis = activeVolumePreview?.scope == VolumePreviewScope.PROFILE_EDITOR &&
+      activeVolumePreview.streamType == type
+    if (isCurrentlyPlayingThis) {
+      onStopEditorStreamPreview()
+    } else if (defaultSoundState.audioMode == BaseAudioMode.SILENT && !silentPreviewAuthorizedInSession) {
+      pendingSilentPreviewRequest = type to targetPercent
+    } else {
+      onToggleEditorStreamPreview(type, targetPercent)
+    }
+  }
+
+  fun requestEditorHoldPreview(type: VolumeStreamType, targetPercent: Int) {
+    if (defaultSoundState.audioMode == BaseAudioMode.SILENT && !silentPreviewAuthorizedInSession) {
+      pendingSilentPreviewRequest = type to targetPercent
+    } else {
+      onStartEditorStreamLoop(type, targetPercent)
+    }
+  }
+
+  if (pendingSilentPreviewRequest != null) {
+    SilentPreviewConfirmDialog(
+      onKeepMuted = { pendingSilentPreviewRequest = null },
+      onListenNow = {
+        val request = pendingSilentPreviewRequest
+        pendingSilentPreviewRequest = null
+        silentPreviewAuthorizedInSession = true
+        if (request != null) {
+          onToggleEditorStreamPreview(request.first, request.second)
+        }
+      },
+    )
+  }
+
   Dialog(
     onDismissRequest = {
+      onStopEditorStreamPreview()
       notifyAutoSaveIfEditing()
       onDismiss()
     },
@@ -783,6 +1272,7 @@ fun ProfileEditorBottomSheet(
           navigationIcon = {
             IconButton(
               onClick = {
+                onStopEditorStreamPreview()
                 notifyAutoSaveIfEditing()
                 onDismiss()
               },
@@ -818,7 +1308,10 @@ fun ProfileEditorBottomSheet(
           actions = {
             if (isEditing && onDeleteProfile != null) {
               IconButton(
-                onClick = { onDeleteProfile(initialProfile.id) },
+                onClick = {
+                  onStopEditorStreamPreview()
+                  onDeleteProfile(initialProfile.id)
+                },
                 modifier = Modifier.testTag(AppTestTags.Profiles.DELETE_TOP_BUTTON),
               ) {
                 Icon(
@@ -829,7 +1322,10 @@ fun ProfileEditorBottomSheet(
               }
             } else if (!isEditing) {
               TextButton(
-                onClick = { onSaveProfile(buildProfile(), false) },
+                onClick = {
+                  onStopEditorStreamPreview()
+                  onSaveProfile(buildProfile(), false)
+                },
                 enabled = name.trim().isNotEmpty(),
                 modifier = Modifier.testTag(AppTestTags.Profiles.CONFIRM_SAVE_BUTTON),
               ) {
@@ -979,7 +1475,20 @@ fun ProfileEditorBottomSheet(
               percent = mediaPercent,
               minPercent = minFor(VolumeStreamType.MEDIA),
               accentColor = activeAccent,
+              activePreviewKind = editorPreviewKindFor(VolumeStreamType.MEDIA),
+              onSingleTapPreview = { requestEditorTapPreview(VolumeStreamType.MEDIA, it) },
+              onDoubleTapPreview = { requestEditorTapPreview(VolumeStreamType.MEDIA, it) },
+              onStartHoldPreview = { requestEditorHoldPreview(VolumeStreamType.MEDIA, it) },
+              onHoldLivePercentChange = {
+                mediaPercent = it
+                onUpdateEditorStreamLoopPercent(VolumeStreamType.MEDIA, it)
+              },
+              onStopHoldPreview = { _, _ -> onStopEditorStreamPreview() },
+              capsuleTestTag = AppTestTags.Profiles.editorStreamCapsule(VolumeStreamType.MEDIA),
               sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.MEDIA),
+              iconButtonTestTag = AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.MEDIA),
+              playCueTestTag = AppTestTags.Profiles.editorStreamPlayCue(VolumeStreamType.MEDIA),
+              previewActiveBadgeTestTag = AppTestTags.Profiles.editorStreamPreviewActiveBadge(VolumeStreamType.MEDIA),
               onValueChangeFinished = {
                 mediaPercent = it
                 notifyAutoSaveIfEditing()
@@ -1001,11 +1510,27 @@ fun ProfileEditorBottomSheet(
                 }
                 notifyAutoSaveIfEditing()
               },
+              activePreviewKind = editorPreviewKindFor(VolumeStreamType.RING),
+              onSingleTapPreview = { requestEditorTapPreview(VolumeStreamType.RING, it) },
+              onDoubleTapPreview = { requestEditorTapPreview(VolumeStreamType.RING, it) },
+              onStartHoldPreview = { requestEditorHoldPreview(VolumeStreamType.RING, it) },
+              onHoldLivePercentChange = {
+                ringPercent = it
+                if (editorRingNotifLinked) {
+                  notifPercent = it
+                }
+                onUpdateEditorStreamLoopPercent(VolumeStreamType.RING, it)
+              },
+              onStopHoldPreview = { _, _ -> onStopEditorStreamPreview() },
               externalPreviewPercent = if (editorRingNotifLinked) editorLinkedDragPreview else null,
               onLivePreviewChange = { preview ->
                 editorLinkedDragPreview = if (editorRingNotifLinked) preview else null
               },
+              capsuleTestTag = AppTestTags.Profiles.editorStreamCapsule(VolumeStreamType.RING),
               sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.RING),
+              iconButtonTestTag = AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.RING),
+              playCueTestTag = AppTestTags.Profiles.editorStreamPlayCue(VolumeStreamType.RING),
+              previewActiveBadgeTestTag = AppTestTags.Profiles.editorStreamPreviewActiveBadge(VolumeStreamType.RING),
               linkButtonTestTag = AppTestTags.Profiles.editorStreamLinkButton(VolumeStreamType.RING),
               onValueChangeFinished = {
                 ringPercent = it
@@ -1031,11 +1556,27 @@ fun ProfileEditorBottomSheet(
                 }
                 notifyAutoSaveIfEditing()
               },
+              activePreviewKind = editorPreviewKindFor(VolumeStreamType.NOTIFICATION),
+              onSingleTapPreview = { requestEditorTapPreview(VolumeStreamType.NOTIFICATION, it) },
+              onDoubleTapPreview = { requestEditorTapPreview(VolumeStreamType.NOTIFICATION, it) },
+              onStartHoldPreview = { requestEditorHoldPreview(VolumeStreamType.NOTIFICATION, it) },
+              onHoldLivePercentChange = {
+                notifPercent = it
+                if (editorRingNotifLinked) {
+                  ringPercent = it
+                }
+                onUpdateEditorStreamLoopPercent(VolumeStreamType.NOTIFICATION, it)
+              },
+              onStopHoldPreview = { _, _ -> onStopEditorStreamPreview() },
               externalPreviewPercent = if (editorRingNotifLinked) editorLinkedDragPreview else null,
               onLivePreviewChange = { preview ->
                 editorLinkedDragPreview = if (editorRingNotifLinked) preview else null
               },
+              capsuleTestTag = AppTestTags.Profiles.editorStreamCapsule(VolumeStreamType.NOTIFICATION),
               sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.NOTIFICATION),
+              iconButtonTestTag = AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.NOTIFICATION),
+              playCueTestTag = AppTestTags.Profiles.editorStreamPlayCue(VolumeStreamType.NOTIFICATION),
+              previewActiveBadgeTestTag = AppTestTags.Profiles.editorStreamPreviewActiveBadge(VolumeStreamType.NOTIFICATION),
               linkButtonTestTag = AppTestTags.Profiles.editorStreamLinkButton(VolumeStreamType.NOTIFICATION),
               onValueChangeFinished = {
                 notifPercent = it
@@ -1051,7 +1592,20 @@ fun ProfileEditorBottomSheet(
               percent = alarmPercent,
               minPercent = minFor(VolumeStreamType.ALARM),
               accentColor = activeAccent,
+              activePreviewKind = editorPreviewKindFor(VolumeStreamType.ALARM),
+              onSingleTapPreview = { requestEditorTapPreview(VolumeStreamType.ALARM, it) },
+              onDoubleTapPreview = { requestEditorTapPreview(VolumeStreamType.ALARM, it) },
+              onStartHoldPreview = { requestEditorHoldPreview(VolumeStreamType.ALARM, it) },
+              onHoldLivePercentChange = {
+                alarmPercent = it
+                onUpdateEditorStreamLoopPercent(VolumeStreamType.ALARM, it)
+              },
+              onStopHoldPreview = { _, _ -> onStopEditorStreamPreview() },
+              capsuleTestTag = AppTestTags.Profiles.editorStreamCapsule(VolumeStreamType.ALARM),
               sliderTestTag = AppTestTags.Profiles.editorStreamSlider(VolumeStreamType.ALARM),
+              iconButtonTestTag = AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.ALARM),
+              playCueTestTag = AppTestTags.Profiles.editorStreamPlayCue(VolumeStreamType.ALARM),
+              previewActiveBadgeTestTag = AppTestTags.Profiles.editorStreamPreviewActiveBadge(VolumeStreamType.ALARM),
               onValueChangeFinished = {
                 alarmPercent = it
                 notifyAutoSaveIfEditing()
@@ -1124,6 +1678,14 @@ fun ProfileEditorBottomSheet(
                   percent = systemPercent,
                   minPercent = minFor(VolumeStreamType.SYSTEM),
                   accentColor = activeAccent,
+                  activePreviewKind = editorPreviewKindFor(VolumeStreamType.SYSTEM),
+                  onRequestTapPreview = { requestEditorTapPreview(VolumeStreamType.SYSTEM, it) },
+                  onRequestHoldPreview = { requestEditorHoldPreview(VolumeStreamType.SYSTEM, it) },
+                  onHoldLivePercentChange = {
+                    systemPercent = it
+                    onUpdateEditorStreamLoopPercent(VolumeStreamType.SYSTEM, it)
+                  },
+                  onStopHoldPreview = onStopEditorStreamPreview,
                   onToggleEnabled = { enabled ->
                     overrideSystemEnabled = enabled
                     notifyAutoSaveIfEditing()
@@ -1139,6 +1701,14 @@ fun ProfileEditorBottomSheet(
                   percent = voiceCallPercent,
                   minPercent = minFor(VolumeStreamType.VOICE_CALL),
                   accentColor = activeAccent,
+                  activePreviewKind = editorPreviewKindFor(VolumeStreamType.VOICE_CALL),
+                  onRequestTapPreview = { requestEditorTapPreview(VolumeStreamType.VOICE_CALL, it) },
+                  onRequestHoldPreview = { requestEditorHoldPreview(VolumeStreamType.VOICE_CALL, it) },
+                  onHoldLivePercentChange = {
+                    voiceCallPercent = it
+                    onUpdateEditorStreamLoopPercent(VolumeStreamType.VOICE_CALL, it)
+                  },
+                  onStopHoldPreview = onStopEditorStreamPreview,
                   onToggleEnabled = { enabled ->
                     overrideVoiceCallEnabled = enabled
                     notifyAutoSaveIfEditing()
@@ -1154,6 +1724,14 @@ fun ProfileEditorBottomSheet(
                   percent = accessibilityPercent,
                   minPercent = minFor(VolumeStreamType.ACCESSIBILITY),
                   accentColor = activeAccent,
+                  activePreviewKind = editorPreviewKindFor(VolumeStreamType.ACCESSIBILITY),
+                  onRequestTapPreview = { requestEditorTapPreview(VolumeStreamType.ACCESSIBILITY, it) },
+                  onRequestHoldPreview = { requestEditorHoldPreview(VolumeStreamType.ACCESSIBILITY, it) },
+                  onHoldLivePercentChange = {
+                    accessibilityPercent = it
+                    onUpdateEditorStreamLoopPercent(VolumeStreamType.ACCESSIBILITY, it)
+                  },
+                  onStopHoldPreview = onStopEditorStreamPreview,
                   onToggleEnabled = { enabled ->
                     overrideAccessibilityEnabled = enabled
                     notifyAutoSaveIfEditing()
@@ -1234,7 +1812,10 @@ fun ProfileEditorBottomSheet(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
             FilledTonalButton(
-              onClick = { onSaveProfile(buildProfile(), false) },
+              onClick = {
+                onStopEditorStreamPreview()
+                onSaveProfile(buildProfile(), false)
+              },
               enabled = name.trim().isNotEmpty(),
               shape = RoundedCornerShape(18.dp),
               modifier = Modifier
@@ -1244,7 +1825,10 @@ fun ProfileEditorBottomSheet(
               Text(AppLabels.Profiles.createOnlyButton, fontWeight = FontWeight.SemiBold)
             }
             Button(
-              onClick = { onSaveProfile(buildProfile(), true) },
+              onClick = {
+                onStopEditorStreamPreview()
+                onSaveProfile(buildProfile(), true)
+              },
               enabled = name.trim().isNotEmpty(),
               shape = RoundedCornerShape(18.dp),
               colors = ButtonDefaults.buttonColors(
@@ -1260,7 +1844,10 @@ fun ProfileEditorBottomSheet(
           }
         } else {
           Button(
-            onClick = { onSaveProfile(buildProfile(), true) },
+            onClick = {
+              onStopEditorStreamPreview()
+              onSaveProfile(buildProfile(), true)
+            },
             shape = RoundedCornerShape(18.dp),
             colors = ButtonDefaults.buttonColors(
               containerColor = activeAccent,
@@ -1285,6 +1872,11 @@ private fun ProfileOptionalSecondaryStreamControl(
   percent: Int,
   minPercent: Int,
   accentColor: Color,
+  activePreviewKind: VolumePreviewKind? = null,
+  onRequestTapPreview: (Int) -> Unit = {},
+  onRequestHoldPreview: (Int) -> Unit = {},
+  onHoldLivePercentChange: (Int) -> Unit = {},
+  onStopHoldPreview: () -> Unit = {},
   onToggleEnabled: (Boolean) -> Unit,
   onPercentChanged: (Int) -> Unit,
 ) {
@@ -1360,7 +1952,17 @@ private fun ProfileOptionalSecondaryStreamControl(
         percent = percent,
         minPercent = minPercent,
         accentColor = accentColor,
+        activePreviewKind = activePreviewKind,
+        onSingleTapPreview = onRequestTapPreview,
+        onDoubleTapPreview = onRequestTapPreview,
+        onStartHoldPreview = onRequestHoldPreview,
+        onHoldLivePercentChange = onHoldLivePercentChange,
+        onStopHoldPreview = { _, _ -> onStopHoldPreview() },
+        capsuleTestTag = AppTestTags.Profiles.editorStreamCapsule(type),
         sliderTestTag = AppTestTags.Profiles.editorStreamSlider(type),
+        iconButtonTestTag = AppTestTags.Profiles.editorStreamIconButton(type),
+        playCueTestTag = AppTestTags.Profiles.editorStreamPlayCue(type),
+        previewActiveBadgeTestTag = AppTestTags.Profiles.editorStreamPreviewActiveBadge(type),
         onValueChangeFinished = onPercentChanged,
       )
     }

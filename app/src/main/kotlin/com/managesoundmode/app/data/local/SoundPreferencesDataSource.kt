@@ -65,6 +65,9 @@ data class SoundPrefsBackupPayload(
   val streamUsageCounts: Map<VolumeStreamType, Int> = emptyMap(),
   val manualStreamOrder: List<VolumeStreamType> = VolumeStreamType.defaultOrder,
   val secondaryDrawerExpanded: Boolean = false,
+  val volumePreviewEnabled: Boolean = true,
+  val useSystemSoundsForPreview: Boolean = true,
+  val silentPreAdjustEnabled: Boolean = true,
 )
 
 data class PersistedSoundPrefs(
@@ -107,6 +110,10 @@ data class PersistedSoundPrefs(
   val streamUsageCounts: Map<VolumeStreamType, Int> = emptyMap(),
   val manualStreamOrder: List<VolumeStreamType> = VolumeStreamType.defaultOrder,
   val secondaryDrawerExpanded: Boolean = false,
+  val volumePreviewEnabled: Boolean = true,
+  val useSystemSoundsForPreview: Boolean = true,
+  val silentPreAdjustEnabled: Boolean = true,
+  val pendingSoundStreams: Map<VolumeStreamType, Int> = emptyMap(),
 )
 
 interface SoundPreferencesDataSource {
@@ -152,6 +159,10 @@ interface SoundPreferencesDataSource {
   suspend fun incrementStreamUsageCount(type: VolumeStreamType) {}
   suspend fun setManualStreamOrder(order: List<VolumeStreamType>) {}
   suspend fun setSecondaryDrawerExpanded(expanded: Boolean) {}
+  suspend fun setVolumePreviewEnabled(enabled: Boolean) {}
+  suspend fun setUseSystemSoundsForPreview(enabled: Boolean) {}
+  suspend fun setSilentPreAdjustEnabled(enabled: Boolean) {}
+  suspend fun setPendingSoundStreams(pending: Map<VolumeStreamType, Int>) {}
   suspend fun resetFactoryDefaults() {}
   suspend fun exportBackupJson(): String = "{}"
   suspend fun importBackupJson(rawJson: String) {}
@@ -253,6 +264,14 @@ class DataStoreSoundPreferencesDataSource(
         val visibleFixedStreamsCount = (prefs[KEY_VISIBLE_FIXED_STREAMS_COUNT] ?: 4)
           .coerceIn(1, VolumeStreamType.entries.size)
 
+        val pendingSoundStreams = prefs[KEY_PENDING_SOUND_STREAMS_JSON]?.let { raw ->
+          runCatching {
+            json.decodeFromString<Map<VolumeStreamType, Int>>(raw)
+              .mapValues { (_, percent) -> percent.coerceIn(0, 100) }
+          }.onFailure { Log.w(TAG, "Falha ao desserializar pendingSoundStreams", it) }
+            .getOrDefault(emptyMap())
+        } ?: emptyMap()
+
         PersistedSoundPrefs(
           schemaVersion = prefs[KEY_SCHEMA_VERSION] ?: CURRENT_SCHEMA_VERSION,
           activeProfileId = activeProfileId,
@@ -293,6 +312,10 @@ class DataStoreSoundPreferencesDataSource(
           streamUsageCounts = streamUsageCounts,
           manualStreamOrder = manualStreamOrder,
           secondaryDrawerExpanded = prefs[KEY_SECONDARY_DRAWER_EXPANDED] ?: false,
+          volumePreviewEnabled = prefs[KEY_VOLUME_PREVIEW_ENABLED] ?: true,
+          useSystemSoundsForPreview = prefs[KEY_USE_SYSTEM_SOUNDS_PREVIEW] ?: true,
+          silentPreAdjustEnabled = prefs[KEY_SILENT_PREADJUST_ENABLED] ?: true,
+          pendingSoundStreams = pendingSoundStreams,
         )
       }
 
@@ -634,6 +657,35 @@ class DataStoreSoundPreferencesDataSource(
     }
   }
 
+  override suspend fun setVolumePreviewEnabled(enabled: Boolean) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_VOLUME_PREVIEW_ENABLED] = enabled
+    }
+  }
+
+  override suspend fun setUseSystemSoundsForPreview(enabled: Boolean) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_USE_SYSTEM_SOUNDS_PREVIEW] = enabled
+    }
+  }
+
+  override suspend fun setSilentPreAdjustEnabled(enabled: Boolean) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_SILENT_PREADJUST_ENABLED] = enabled
+    }
+  }
+
+  override suspend fun setPendingSoundStreams(pending: Map<VolumeStreamType, Int>) {
+    val sanitized = pending.mapValues { (_, percent) -> percent.coerceIn(0, 100) }
+    context.soundDataStore.edit { prefs ->
+      if (sanitized.isEmpty()) {
+        prefs.remove(KEY_PENDING_SOUND_STREAMS_JSON)
+      } else {
+        prefs[KEY_PENDING_SOUND_STREAMS_JSON] = json.encodeToString(sanitized)
+      }
+    }
+  }
+
   override suspend fun resetFactoryDefaults() {
     context.soundDataStore.edit { prefs ->
       prefs[KEY_SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
@@ -666,6 +718,10 @@ class DataStoreSoundPreferencesDataSource(
       prefs.remove(KEY_STREAM_USAGE_COUNTS_JSON)
       prefs.remove(KEY_MANUAL_STREAM_ORDER_JSON)
       prefs[KEY_SECONDARY_DRAWER_EXPANDED] = false
+      prefs[KEY_VOLUME_PREVIEW_ENABLED] = true
+      prefs[KEY_USE_SYSTEM_SOUNDS_PREVIEW] = true
+      prefs[KEY_SILENT_PREADJUST_ENABLED] = true
+      prefs.remove(KEY_PENDING_SOUND_STREAMS_JSON)
     }
   }
 
@@ -702,6 +758,9 @@ class DataStoreSoundPreferencesDataSource(
       streamUsageCounts = current.streamUsageCounts,
       manualStreamOrder = current.manualStreamOrder,
       secondaryDrawerExpanded = current.secondaryDrawerExpanded,
+      volumePreviewEnabled = current.volumePreviewEnabled,
+      useSystemSoundsForPreview = current.useSystemSoundsForPreview,
+      silentPreAdjustEnabled = current.silentPreAdjustEnabled,
     )
     return json.encodeToString(payload)
   }
@@ -762,6 +821,9 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_STREAM_USAGE_COUNTS_JSON] = json.encodeToString(sanitizedUsageCounts)
       prefs[KEY_MANUAL_STREAM_ORDER_JSON] = json.encodeToString(sanitizedManualOrder)
       prefs[KEY_SECONDARY_DRAWER_EXPANDED] = payload.secondaryDrawerExpanded
+      prefs[KEY_VOLUME_PREVIEW_ENABLED] = payload.volumePreviewEnabled
+      prefs[KEY_USE_SYSTEM_SOUNDS_PREVIEW] = payload.useSystemSoundsForPreview
+      prefs[KEY_SILENT_PREADJUST_ENABLED] = payload.silentPreAdjustEnabled
     }
   }
 
@@ -811,5 +873,9 @@ class DataStoreSoundPreferencesDataSource(
     val KEY_STREAM_USAGE_COUNTS_JSON = stringPreferencesKey("stream_usage_counts_json")
     val KEY_MANUAL_STREAM_ORDER_JSON = stringPreferencesKey("manual_stream_order_json")
     val KEY_SECONDARY_DRAWER_EXPANDED = booleanPreferencesKey("secondary_drawer_expanded")
+    val KEY_VOLUME_PREVIEW_ENABLED = booleanPreferencesKey("volume_preview_enabled")
+    val KEY_USE_SYSTEM_SOUNDS_PREVIEW = booleanPreferencesKey("use_system_sounds_preview")
+    val KEY_SILENT_PREADJUST_ENABLED = booleanPreferencesKey("silent_preadjust_enabled")
+    val KEY_PENDING_SOUND_STREAMS_JSON = stringPreferencesKey("pending_sound_streams_json")
   }
 }

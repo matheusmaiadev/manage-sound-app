@@ -117,6 +117,23 @@ interface SoundModeRepository {
   suspend fun setStreamSortMode(mode: StreamSortMode): Result<Unit> = Result.success(Unit)
   suspend fun setManualStreamOrder(order: List<VolumeStreamType>): Result<Unit> = Result.success(Unit)
   suspend fun setSecondaryDrawerExpanded(expanded: Boolean): Result<Unit> = Result.success(Unit)
+  suspend fun setVolumePreviewEnabled(enabled: Boolean): Result<Unit> = Result.success(Unit)
+  suspend fun setUseSystemSoundsForPreview(enabled: Boolean): Result<Unit> = Result.success(Unit)
+  suspend fun setSilentPreAdjustEnabled(enabled: Boolean): Result<Unit> = Result.success(Unit)
+  fun beginIsolatedHardwarePreview(
+    streamType: VolumeStreamType,
+    percent: Int,
+    forceAudibleInSilent: Boolean = true,
+  ): Result<Unit> = Result.success(Unit)
+  fun updateIsolatedHardwarePreviewPercent(
+    streamType: VolumeStreamType,
+    percent: Int,
+  ): Result<Unit> = Result.success(Unit)
+  fun endIsolatedHardwarePreview(): Result<Unit> = Result.success(Unit)
+  fun applyLiveStreamVolumeDirect(
+    streamType: VolumeStreamType,
+    percent: Int,
+  ): Result<Unit> = Result.success(Unit)
   suspend fun syncSystemZenRulesNow(): Result<Int> = Result.success(0)
   suspend fun syncExternalSurfacesNow(): Result<Unit> = Result.success(Unit)
   suspend fun syncBackgroundGeofencesNow(): Result<Int> = Result.success(0)
@@ -176,6 +193,8 @@ class DefaultSoundModeRepository(
   private val lastObservedState = AtomicReference(systemController.readSoundState())
   private val syncedInitialFallback = AtomicReference(false)
   private val lastCanWriteSettings = AtomicReference(false)
+  private val previewLock = Any()
+  private val isolatedPreviewBaseline = MutableStateFlow<PreviewHardwareBaseline?>(null)
 
   override val preferencesStream: Flow<PersistedSoundPrefs> = preferencesDataSource.prefsFlow
 
@@ -188,7 +207,8 @@ class DefaultSoundModeRepository(
     systemController.systemChanges,
     manualRefreshTrigger,
     preferencesDataSource.prefsFlow,
-  ) { _, _, prefs ->
+    isolatedPreviewBaseline,
+  ) { _, _, prefs, previewBaseline ->
     val canWriteNow = systemController.canWriteSystemSettings()
     val wasCanWrite = lastCanWriteSettings.getAndSet(canWriteNow)
     if (!syncedInitialFallback.getAndSet(true) || (!wasCanWrite && canWriteNow)) {
@@ -245,11 +265,12 @@ class DefaultSoundModeRepository(
       )
     }
 
-    val currentSoundState = systemController.readSoundState()
+    val currentSoundState = previewBaseline?.soundState ?: systemController.readSoundState()
+    val currentStreams = previewBaseline?.streams ?: systemController.readVolumeStreams()
     DeviceSoundSnapshot(
       currentMode = currentSoundState.toLegacyApproximation(),
       currentSoundState = currentSoundState,
-      streams = systemController.readVolumeStreams(),
+      streams = currentStreams,
       hasDndPermission = systemController.hasDndPermission(),
       canWriteSystemSettings = systemController.canWriteSystemSettings(),
       canScheduleExactAlarms = systemController.canScheduleExactAlarms(),
@@ -332,6 +353,7 @@ class DefaultSoundModeRepository(
       }
 
       if (appliedState.audioMode == BaseAudioMode.SOUND) {
+        applyAndClearPendingSoundStreamsIfAny(prefs)
         persistLastActiveSoundSnapshot(appliedState, systemController.readVolumeStreams(), prefs)
       }
 
@@ -400,10 +422,41 @@ class DefaultSoundModeRepository(
   override suspend fun setStreamVolume(type: VolumeStreamType, percent: Int): Result<Unit> {
     val prefsBefore = preferencesDataSource.prefsFlow.first()
     val stateBefore = systemController.readSoundState()
+
+    // [SPEC-005 / Issue #3] Pré-ajuste silencioso: quando o aparelho está em SILENT/VIBRATE
+    // e silentPreAdjustEnabled == true, ajustar RING, NOTIFICATION ou SYSTEM salva os alvos
+    // pendentes para aplicação ao retornar a Som, sem desarmar o silêncio do sistema operacional.
+    if (stateBefore.audioMode == BaseAudioMode.SILENT &&
+      type.isMutedBySilentRinger &&
+      prefsBefore.silentPreAdjustEnabled
+    ) {
+      return runCatching {
+        val updatedPending = prefsBefore.pendingSoundStreams.toMutableMap()
+        if (prefsBefore.ringNotificationLinked &&
+          (type == VolumeStreamType.RING || type == VolumeStreamType.NOTIFICATION)
+        ) {
+          val clampedRing = percent.coerceIn(systemController.readStreamMinPercent(VolumeStreamType.RING), 100)
+          val clampedNotif = percent.coerceIn(systemController.readStreamMinPercent(VolumeStreamType.NOTIFICATION), 100)
+          updatedPending[VolumeStreamType.RING] = clampedRing
+          updatedPending[VolumeStreamType.NOTIFICATION] = clampedNotif
+        } else {
+          val clamped = percent.coerceIn(systemController.readStreamMinPercent(type), 100)
+          updatedPending[type] = clamped
+        }
+        preferencesDataSource.setPendingSoundStreams(updatedPending)
+        preferencesDataSource.incrementStreamUsageCount(type)
+        markManualOverrideIfRuleActive()
+        preferencesDataSource.setActiveProfileId(null)
+        onRefreshExternalSurfaces()
+        refreshSystemState()
+      }
+    }
+
     var switchedToSound = false
-    if ((type == VolumeStreamType.RING || type == VolumeStreamType.NOTIFICATION) &&
+    if (type.isMutedBySilentRinger &&
       percent > 0 &&
       stateBefore.audioMode == BaseAudioMode.SILENT &&
+      !prefsBefore.silentPreAdjustEnabled &&
       (stateBefore.vibrateEnabled || systemController.hasDndPermission())
     ) {
       val soundTarget = SoundState(
@@ -413,6 +466,9 @@ class DefaultSoundModeRepository(
       systemController.applySoundState(soundTarget)
       lastObservedState.set(soundTarget)
       switchedToSound = true
+      if (prefsBefore.pendingSoundStreams.isNotEmpty()) {
+        applyAndClearPendingSoundStreamsIfAny(prefsBefore)
+      }
     }
 
     val applyResult = if (
@@ -466,6 +522,9 @@ class DefaultSoundModeRepository(
 
     return applyProfileToSystem(profile).map {
       lastObservedState.set(targetState)
+      if (prefsBefore.pendingSoundStreams.isNotEmpty()) {
+        preferencesDataSource.setPendingSoundStreams(emptyMap())
+      }
       if (targetState.audioMode == BaseAudioMode.SOUND) {
         preferencesDataSource.setSoundVibrateEnabledFallback(targetState.vibrateEnabled)
         onDismissSmartPrompt()
@@ -607,8 +666,9 @@ class DefaultSoundModeRepository(
     if (restoreState.audioMode == BaseAudioMode.SOUND) {
       preferencesDataSource.setSoundVibrateEnabledFallback(restoreState.vibrateEnabled)
       systemController.applyAllStreams(savedTimer.previousStreams)
+      applyAndClearPendingSoundStreamsIfAny(prefs)
       preferencesDataSource.setSavedMediaBeforeMute(null)
-      persistLastActiveSoundSnapshot(restoreState, savedTimer.previousStreams, prefs)
+      persistLastActiveSoundSnapshot(restoreState, systemController.readVolumeStreams(), prefs)
     }
     logTransition(
       title = "Timer finalizado • Modo restaurado",
@@ -1041,6 +1101,7 @@ class DefaultSoundModeRepository(
     if (linked) {
       val currentState = systemController.readSoundState()
       val currentStreams = systemController.readVolumeStreams()
+      val currentPrefs = preferencesDataSource.prefsFlow.first()
       if (currentState.audioMode == BaseAudioMode.SOUND &&
         currentStreams.ringPercent != currentStreams.notificationPercent
       ) {
@@ -1050,6 +1111,22 @@ class DefaultSoundModeRepository(
         )
         val updatedPrefs = preferencesDataSource.prefsFlow.first()
         persistLastActiveSoundSnapshot(currentState, systemController.readVolumeStreams(), updatedPrefs)
+      } else if (currentState.audioMode == BaseAudioMode.SILENT &&
+        currentPrefs.pendingSoundStreams.isNotEmpty()
+      ) {
+        val pending = currentPrefs.pendingSoundStreams.toMutableMap()
+        val sourcePercent = pending[VolumeStreamType.RING] ?: pending[VolumeStreamType.NOTIFICATION]
+        if (sourcePercent != null) {
+          pending[VolumeStreamType.RING] = sourcePercent.coerceIn(
+            systemController.readStreamMinPercent(VolumeStreamType.RING),
+            100,
+          )
+          pending[VolumeStreamType.NOTIFICATION] = sourcePercent.coerceIn(
+            systemController.readStreamMinPercent(VolumeStreamType.NOTIFICATION),
+            100,
+          )
+          preferencesDataSource.setPendingSoundStreams(pending)
+        }
       }
     }
     onRefreshExternalSurfaces()
@@ -1074,6 +1151,85 @@ class DefaultSoundModeRepository(
   override suspend fun setSecondaryDrawerExpanded(expanded: Boolean): Result<Unit> = runCatching {
     preferencesDataSource.setSecondaryDrawerExpanded(expanded)
     refreshSystemState()
+  }
+
+  override suspend fun setVolumePreviewEnabled(enabled: Boolean): Result<Unit> = runCatching {
+    preferencesDataSource.setVolumePreviewEnabled(enabled)
+    refreshSystemState()
+  }
+
+  override suspend fun setUseSystemSoundsForPreview(enabled: Boolean): Result<Unit> = runCatching {
+    preferencesDataSource.setUseSystemSoundsForPreview(enabled)
+    refreshSystemState()
+  }
+
+  override suspend fun setSilentPreAdjustEnabled(enabled: Boolean): Result<Unit> = runCatching {
+    preferencesDataSource.setSilentPreAdjustEnabled(enabled)
+    refreshSystemState()
+  }
+
+  override fun beginIsolatedHardwarePreview(
+    streamType: VolumeStreamType,
+    percent: Int,
+    forceAudibleInSilent: Boolean,
+  ): Result<Unit> = runCatching {
+    synchronized(previewLock) {
+      val baseline = isolatedPreviewBaseline.value ?: PreviewHardwareBaseline(
+        soundState = systemController.readSoundState(),
+        streams = systemController.readVolumeStreams(),
+      ).also {
+        isolatedPreviewBaseline.value = it
+      }
+
+      if (baseline.soundState.audioMode == BaseAudioMode.SILENT && forceAudibleInSilent) {
+        systemController.applySoundState(
+          SoundState(
+            audioMode = BaseAudioMode.SOUND,
+            vibrateEnabled = baseline.soundState.vibrateEnabled,
+          ),
+        )
+      }
+      systemController.applyAllStreams(baseline.streams)
+      systemController.applyStreamVolume(streamType, percent)
+    }
+  }
+
+  override fun updateIsolatedHardwarePreviewPercent(
+    streamType: VolumeStreamType,
+    percent: Int,
+  ): Result<Unit> = runCatching {
+    synchronized(previewLock) {
+      if (isolatedPreviewBaseline.value != null) {
+        systemController.applyStreamVolume(streamType, percent)
+      }
+    }
+  }
+
+  override fun endIsolatedHardwarePreview(): Result<Unit> = runCatching {
+    val baselineToRestore = synchronized(previewLock) {
+      val current = isolatedPreviewBaseline.value ?: return@runCatching
+      try {
+        systemController.applySoundState(current.soundState)
+        systemController.applyAllStreams(current.streams)
+        if (current.soundState.audioMode == BaseAudioMode.SILENT) {
+          systemController.applySoundState(current.soundState)
+        }
+      } finally {
+        isolatedPreviewBaseline.value = null
+      }
+      current
+    }
+    lastObservedState.set(baselineToRestore.soundState)
+  }
+
+  override fun applyLiveStreamVolumeDirect(
+    streamType: VolumeStreamType,
+    percent: Int,
+  ): Result<Unit> = runCatching {
+    val currentState = systemController.readSoundState()
+    if (currentState.audioMode == BaseAudioMode.SOUND || !streamType.isMutedBySilentRinger) {
+      systemController.applyStreamVolume(streamType, percent)
+    }
   }
 
   override suspend fun syncSystemZenRulesNow(): Result<Int> = runCatching {
@@ -1244,7 +1400,8 @@ class DefaultSoundModeRepository(
             if (snapState.audioMode == BaseAudioMode.SOUND) {
               preferencesDataSource.setSoundVibrateEnabledFallback(snapState.vibrateEnabled)
               systemController.applyAllStreams(snap.streams).getOrThrow()
-              persistLastActiveSoundSnapshot(snapState, snap.streams, updatedPrefs)
+              applyAndClearPendingSoundStreamsIfAny(updatedPrefs)
+              persistLastActiveSoundSnapshot(snapState, systemController.readVolumeStreams(), updatedPrefs)
             }
             preferencesDataSource.setActiveProfileId(null)
             preferencesDataSource.setSavedSnapshot(null)
@@ -1267,6 +1424,7 @@ class DefaultSoundModeRepository(
             applyProfileToSystem(fallback).getOrThrow()
             if (fallbackState.audioMode == BaseAudioMode.SOUND) {
               preferencesDataSource.setSoundVibrateEnabledFallback(fallbackState.vibrateEnabled)
+              applyAndClearPendingSoundStreamsIfAny(updatedPrefs)
               persistLastActiveSoundSnapshot(fallbackState, systemController.readVolumeStreams(), updatedPrefs)
             }
             preferencesDataSource.setActiveProfileId(fallback.id)
@@ -1383,6 +1541,7 @@ class DefaultSoundModeRepository(
         systemController.applyStreamVolume(VolumeStreamType.MEDIA, savedMedia)
         preferencesDataSource.setSavedMediaBeforeMute(null)
       }
+      applyAndClearPendingSoundStreamsIfAny(prefs)
       persistLastActiveSoundSnapshot(currentState, systemController.readVolumeStreams(), prefs)
     } else {
       // O aparelho JÁ estava em Som e o usuário ajustou algum volume -> respeitar 100%!
@@ -1575,12 +1734,25 @@ class DefaultSoundModeRepository(
     )
   }
 
+  private suspend fun applyAndClearPendingSoundStreamsIfAny(prefs: PersistedSoundPrefs) {
+    if (prefs.pendingSoundStreams.isEmpty()) return
+    prefs.pendingSoundStreams.forEach { (streamType, targetPercent) ->
+      systemController.applyStreamVolume(streamType, targetPercent)
+    }
+    preferencesDataSource.setPendingSoundStreams(emptyMap())
+  }
+
   private fun mergeProfiles(
     savedProfiles: List<SoundProfile>,
     deletedIds: Set<String> = emptySet(),
   ): List<SoundProfile> = SoundProfile.mergeProfiles(
     savedProfiles = savedProfiles,
     deletedIds = deletedIds,
+  )
+
+  private data class PreviewHardwareBaseline(
+    val soundState: SoundState,
+    val streams: VolumeStreams,
   )
 
   private data class Quadruple<A, B, C, D>(

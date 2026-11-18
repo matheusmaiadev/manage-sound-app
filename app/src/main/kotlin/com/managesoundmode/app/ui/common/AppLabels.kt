@@ -291,6 +291,42 @@ object AppLabels {
       get() = tr("Toque e Notificações vinculados", "Ring and Notifications linked")
     val ringNotificationUnlinkedMessage: String
       get() = tr("Toque e Notificações separados", "Ring and Notifications unlinked")
+    val previewChipActiveLabel: String
+      get() = tr("Ícone • 2× • Segure", "Icon • 2× • Hold")
+    val previewChipMutedLabel: String
+      get() = tr("Ajuste mudo", "Muted adjust")
+    val previewChipSilentProtectedLabel: String
+      get() = tr("Silêncio protegido", "Silence protected")
+    val previewPlayingSubtitle: String
+      get() = tr("Tocando...", "Playing...")
+    val previewLoopingSubtitle: String
+      get() = tr("Em loop • solte p/ parar", "Looping • release to stop")
+    val previewCueSubtitle: String
+      get() = tr("Toque p/ ouvir • segure em loop", "Tap to listen • hold to loop")
+    val pendingForSoundBadge: String
+      get() = tr("Pré-ajuste p/ Som", "Pre-set for Sound")
+    val silentPreviewDialogTitle: String
+      get() = tr("Aparelho em modo silencioso", "Device in silent mode")
+    val silentPreviewDialogBody: String
+      get() = tr(
+        "Deseja reproduzir uma amostra rápida deste canal agora? O modo silencioso será restaurado imediatamente ao terminar.",
+        "Play a quick sample of this channel now? Silent mode will be restored immediately afterward.",
+      )
+    val silentPreviewKeepMutedButton: String
+      get() = tr("Manter mudo", "Keep muted")
+    val silentPreviewListenNowButton: String
+      get() = tr("Ouvir agora", "Listen now")
+    val volumePreviewEnabledFeedback: String
+      get() = tr("Preview sonoro por gesto ativado", "Gesture sound preview enabled")
+    val volumePreviewMutedFeedback: String
+      get() = tr("Ajuste mudo ativado (preview pausado)", "Muted adjustment active (preview paused)")
+
+    fun streamPreviewIconContentDescription(label: String, isPlaying: Boolean): String =
+      if (isPlaying) {
+        tr("Parar preview de $label", "Stop $label preview")
+      } else {
+        tr("Ouvir preview de $label (segure para loop)", "Preview $label volume (hold to loop)")
+      }
 
     fun channelsBadge(fixedCount: Int, totalCount: Int = 7): String =
       if (fixedCount >= totalCount) {
@@ -1037,6 +1073,29 @@ object AppLabels {
 
     val volumeChannelsSectionTitle: String
       get() = tr("Canais de Volume & Gaveta Inteligente", "Volume Channels & Smart Drawer")
+    val volumePreviewSectionTitle: String
+      get() = tr("Preview Acústico & Pré-Ajuste Silencioso", "Acoustic Preview & Silent Pre-Adjust")
+    val volumePreviewEnabledTitle: String
+      get() = tr("Preview Sonoro sob Comando", "On-Demand Volume Preview")
+    val volumePreviewEnabledSubtitle: String
+      get() = tr(
+        "Toque no ícone (1×), dê duplo toque (2×) ou segure a barra para ouvir o volume real",
+        "Tap the icon (1×), double-tap (2×), or press and hold a bar to hear actual volume",
+      )
+    val useSystemSoundsPreviewTitle: String
+      get() = tr("Usar Sons Reais do Aparelho", "Use Device System Sounds")
+    val useSystemSoundsPreviewSubtitle: String
+      get() = tr(
+        "Reproduz seu toque, notificação e alarme atuais (ou acorde acústico Zenith quando desligado)",
+        "Plays your current ringtone, notification, and alarm tones (or Zenith acoustic chord when off)",
+      )
+    val silentPreAdjustTitle: String
+      get() = tr("Pré-Ajuste Silencioso de Canais", "Silent Channel Pre-Adjustment")
+    val silentPreAdjustSubtitle: String
+      get() = tr(
+        "Permite ajustar Toque, Notificações e Sistema sem desarmar o modo Silencioso ou Vibrar",
+        "Adjust Ring, Notifications, and System without disarming Silent or Vibrate mode",
+      )
     val ringNotificationLinkTitle: String
       get() = tr("Vincular Toque e Notificações", "Link Ring & Notifications")
     val ringNotificationLinkSubtitle: String

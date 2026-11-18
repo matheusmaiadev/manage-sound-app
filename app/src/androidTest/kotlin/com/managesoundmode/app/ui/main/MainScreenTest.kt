@@ -3,16 +3,22 @@ package com.managesoundmode.app.ui.main
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeRight
 import com.managesoundmode.app.domain.model.AccessControlConfig
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
@@ -30,6 +36,9 @@ import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.system.ActiveVolumePreview
+import com.managesoundmode.app.system.VolumePreviewKind
+import com.managesoundmode.app.system.VolumePreviewScope
 import com.managesoundmode.app.tile.QuickTileKind
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
@@ -1188,5 +1197,240 @@ class MainScreenTest {
     assertNotNull(savedProfile?.overrideSystemPercent)
     assertEquals(null, savedProfile?.overrideVoiceCallPercent)
     assertEquals(null, savedProfile?.overrideAccessibilityPercent)
+  }
+
+  /**
+   * UC-39 (SPEC-005 / Issues #2, #3 & #4):
+   * - AC-01: Arraste normal 100% mudo + Cue clicável `PlayArrow` visível por 4.5s e auto-ocultado após 4.5s
+   * - AC-02: 3 Gestos (`1×` ícone, `2×` cápsula e `Press & Hold` loop ao vivo com parada imediata ao soltar)
+   * - AC-04: Pré-ajuste silencioso (`Pré-ajuste p/ Som`) + diálogo de confirmação em modo silencioso
+   * - AC-05: Preview isolado em `ProfileEditorBottomSheet` memorizando autorização na sessão e limpando ao fechar
+   */
+  @Test
+  fun uc39_spec005_silentDragPlayArrowCueThreeGesturesSilentPreAdjustAndProfileEditorPreview() {
+    var soundState by mutableStateOf(SoundState(BaseAudioMode.SOUND, true))
+    var previewEnabled by mutableStateOf(true)
+    var useSystemSounds by mutableStateOf(true)
+    var silentPreAdjust by mutableStateOf(true)
+    var pendingStreams by mutableStateOf<Map<VolumeStreamType, Int>>(emptyMap())
+    var activePreview by mutableStateOf<ActiveVolumePreview?>(null)
+    val liveLoopUpdates = mutableListOf<Int>()
+    var stopCalls = 0
+
+    composeTestRule.setContent {
+      ManageSoundModeTheme {
+        MainDashboardContent(
+          state = MainScreenUiState.Ready(
+            currentMode = soundState.toLegacyApproximation(),
+            currentSoundState = soundState,
+            streams = VolumeStreams(
+              ringPercent = if (soundState.audioMode == BaseAudioMode.SILENT) 0 else 80,
+              notificationPercent = if (soundState.audioMode == BaseAudioMode.SILENT) 0 else 80,
+              mediaPercent = 45,
+              alarmPercent = 90,
+            ),
+            hasDndPermission = true,
+            profiles = SoundProfile.defaultPresets,
+            volumePreviewEnabled = previewEnabled,
+            useSystemSoundsForPreview = useSystemSounds,
+            silentPreAdjustEnabled = silentPreAdjust,
+            pendingSoundStreams = pendingStreams,
+            activeVolumePreview = activePreview,
+          ),
+          onSelectMode = {},
+          onSelectAudioMode = { nextMode ->
+            soundState = SoundState(nextMode, soundState.vibrateEnabled)
+            if (nextMode == BaseAudioMode.SOUND) {
+              pendingStreams = emptyMap()
+            }
+          },
+          onStreamVolumeChange = { type, percent ->
+            if (soundState.audioMode == BaseAudioMode.SILENT && type.isMutedBySilentRinger && silentPreAdjust) {
+              val next = pendingStreams.toMutableMap()
+              next[type] = percent
+              if (type == VolumeStreamType.RING || type == VolumeStreamType.NOTIFICATION) {
+                next[VolumeStreamType.RING] = percent
+                next[VolumeStreamType.NOTIFICATION] = percent
+              }
+              pendingStreams = next
+            }
+          },
+          onToggleVolumePreviewQuick = {
+            previewEnabled = !previewEnabled
+            if (!previewEnabled) activePreview = null
+          },
+          onSetVolumePreviewEnabled = { previewEnabled = it },
+          onSetUseSystemSoundsForPreview = { useSystemSounds = it },
+          onSetSilentPreAdjustEnabled = { silentPreAdjust = it },
+          onToggleStreamPreview = { type, percent, scope, _ ->
+            activePreview = if (activePreview?.streamType == type && activePreview?.scope == scope) {
+              null
+            } else {
+              ActiveVolumePreview(type, percent, VolumePreviewKind.ONE_SHOT, scope)
+            }
+          },
+          onStartStreamLoopPreview = { type, percent, scope, _ ->
+            activePreview = ActiveVolumePreview(type, percent, VolumePreviewKind.HOLD_LOOP, scope)
+          },
+          onUpdateStreamLoopPercent = { _, percent, _ ->
+            liveLoopUpdates.add(percent)
+            activePreview = activePreview?.copy(percent = percent)
+          },
+          onStopVolumePreview = {
+            stopCalls++
+            activePreview = null
+          },
+          onActivateProfile = {},
+          onStartTimer = { _, _ -> },
+          onCancelTimer = {},
+          onSaveProfile = { _, _ -> },
+          onDismissMessage = {},
+          onRequestDndPermission = {},
+        )
+      }
+    }
+
+    // 1. AC-01: Arrastar slider é 100% mudo e acende o Cue `PlayArrow` por 4.5s
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.MEDIA))
+      .performScrollTo()
+      .performTouchInput {
+        down(Offset(width * 0.45f, height / 2f))
+        moveTo(Offset(width * 0.85f, height / 2f))
+        up()
+      }
+    assertEquals(null, activePreview)
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamPlayCue(VolumeStreamType.MEDIA))
+      .assertIsDisplayed()
+
+    composeTestRule.mainClock.advanceTimeBy(4_600L)
+    composeTestRule.waitForIdle()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamPlayCue(VolumeStreamType.MEDIA))
+      .assertDoesNotExist()
+
+    // 2. AC-02a: `1×` Toque simples no ícone circular toca 1 amostra e 2º toque interrompe
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.RING))
+      .performScrollTo()
+      .performClick()
+    assertEquals(VolumeStreamType.RING, activePreview?.streamType)
+    assertEquals(VolumePreviewKind.ONE_SHOT, activePreview?.kind)
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamPreviewActiveBadge(VolumeStreamType.RING))
+      .assertIsDisplayed()
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.RING))
+      .performClick()
+    assertEquals(null, activePreview)
+
+    // 3. AC-02b: `2×` Duplo toque na cápsula toca 1 amostra e 2º duplo toque interrompe
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamCapsule(VolumeStreamType.ALARM))
+      .performScrollTo()
+      .performTouchInput { doubleClick() }
+    assertEquals(VolumeStreamType.ALARM, activePreview?.streamType)
+    assertEquals(VolumePreviewKind.ONE_SHOT, activePreview?.kind)
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamCapsule(VolumeStreamType.ALARM))
+      .performTouchInput { doubleClick() }
+    assertEquals(null, activePreview)
+
+    // 4. AC-02c: `Press & Hold` inicia loop contínuo, ajusta volume ao vivo no arraste e cessa ao soltar
+    var holdObservedActive = false
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.MEDIA))
+      .performScrollTo()
+      .performTouchInput {
+        down(center)
+        advanceEventTime(380L)
+      }
+    composeTestRule.mainClock.advanceTimeBy(400L)
+    composeTestRule.waitForIdle()
+    holdObservedActive = activePreview?.kind == VolumePreviewKind.HOLD_LOOP
+    assertTrue(holdObservedActive)
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.MEDIA))
+      .performTouchInput {
+        moveBy(Offset(90f, 0f))
+        advanceEventTime(80L)
+        up()
+      }
+    composeTestRule.waitForIdle()
+    assertTrue(liveLoopUpdates.isNotEmpty())
+    assertEquals(null, activePreview)
+
+    // 5. Chip de cabeçalho alterna entre "Ícone • 2× • Segure" e "Ajuste mudo"
+    composeTestRule.onNodeWithTag(AppTestTags.Now.VOLUME_PREVIEW_CHIP).performScrollTo().performClick()
+    composeTestRule.onNodeWithText(AppLabels.Now.previewChipMutedLabel).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.VOLUME_PREVIEW_CHIP).performClick()
+    composeTestRule.onNodeWithText(AppLabels.Now.previewChipActiveLabel).assertIsDisplayed()
+
+    // 6. AC-04: Em modo Silêncio, ajustar RING cria Pré-ajuste p/ Som sem desarmar Silêncio + diálogo de segurança no preview
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Now.HERO_MODE_CARD))
+    composeTestRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamSlider(VolumeStreamType.RING))
+      .performScrollTo()
+      .performTouchInput {
+        down(Offset(width * 0.1f, height / 2f))
+        moveTo(Offset(width * 0.8f, height / 2f))
+        up()
+      }
+    assertEquals(BaseAudioMode.SILENT, soundState.audioMode)
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamPendingBadge(VolumeStreamType.RING))
+      .assertIsDisplayed()
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.RING))
+      .performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_CONFIRM_DIALOG).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_KEEP_MUTED_BUTTON).performClick()
+    assertEquals(null, activePreview)
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.RING))
+      .performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_LISTEN_NOW_BUTTON).performClick()
+    assertEquals(VolumeStreamType.RING, activePreview?.streamType)
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.streamIconButton(VolumeStreamType.RING))
+      .performClick()
+    assertEquals(null, activePreview)
+
+    // 7. AC-05: ProfileEditorBottomSheet em aparelho silenciado confirma 1x na sessão e limpa no fechamento
+    composeTestRule.onNodeWithTag(AppTestTags.Tabs.PROFILES).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.editButton("preset_home")).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.menuEditItem("preset_home")).performClick()
+
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.RING))
+      .performScrollTo()
+      .performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_CONFIRM_DIALOG).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_LISTEN_NOW_BUTTON).performClick()
+    assertEquals(VolumePreviewScope.PROFILE_EDITOR, activePreview?.scope)
+    assertEquals(VolumeStreamType.RING, activePreview?.streamType)
+
+    // Segundo canal na mesma sessão do editor toca direto sem repetir o modal
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Profiles.editorStreamIconButton(VolumeStreamType.ALARM))
+      .performScrollTo()
+      .performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.SILENT_PREVIEW_CONFIRM_DIALOG).assertDoesNotExist()
+    assertEquals(VolumeStreamType.ALARM, activePreview?.streamType)
+
+    // Fechar o editor interrompe o preview imediatamente
+    val stopsBeforeClose = stopCalls
+    composeTestRule.onNodeWithText(AppLabels.Profiles.applyNowButton).performScrollTo().performClick()
+    assertTrue(stopCalls > stopsBeforeClose)
+    assertEquals(null, activePreview)
   }
 }

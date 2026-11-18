@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
@@ -68,6 +69,7 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.RingVolume
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
@@ -94,6 +96,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -141,6 +144,7 @@ import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.system.SmartNotificationManager
+import com.managesoundmode.app.system.VolumePreviewScope
 import com.managesoundmode.app.tile.QuickTileKind
 import com.managesoundmode.app.tile.SoundModeTileService
 import com.managesoundmode.app.ui.common.AppLabels
@@ -150,6 +154,7 @@ import com.managesoundmode.app.ui.components.FirstRunOnboardingDialog
 import com.managesoundmode.app.ui.components.PillVolumeSliderRow
 import com.managesoundmode.app.ui.components.ProfileEditorBottomSheet
 import com.managesoundmode.app.ui.components.ProminentLocationDisclosureDialog
+import com.managesoundmode.app.ui.components.SilentPreviewConfirmDialog
 import com.managesoundmode.app.ui.components.ZenithSplitModeAndVibrateRow
 import com.managesoundmode.app.ui.components.audioModeIcon
 import com.managesoundmode.app.ui.components.profileIconForKey
@@ -255,7 +260,9 @@ fun MainScreen(
 
   LifecycleResumeEffect(Unit) {
     viewModel.onRefreshSystemState()
-    onPauseOrDispose {}
+    onPauseOrDispose {
+      viewModel.onStopVolumePreview()
+    }
   }
 
   when (val state = uiState) {
@@ -457,6 +464,14 @@ fun MainScreen(
           onMoveStreamInManualOrder = viewModel::onMoveStreamInManualOrder,
           onSetSecondaryDrawerExpanded = viewModel::onSetSecondaryDrawerExpanded,
           onLatchStreamOrder = viewModel::onLatchStreamOrder,
+          onToggleVolumePreviewQuick = viewModel::onToggleVolumePreviewQuick,
+          onSetVolumePreviewEnabled = viewModel::onSetVolumePreviewEnabled,
+          onSetUseSystemSoundsForPreview = viewModel::onSetUseSystemSoundsForPreview,
+          onSetSilentPreAdjustEnabled = viewModel::onSetSilentPreAdjustEnabled,
+          onToggleStreamPreview = viewModel::onToggleStreamPreview,
+          onStartStreamLoopPreview = viewModel::onStartStreamLoopPreview,
+          onUpdateStreamLoopPercent = viewModel::onUpdateStreamLoopPercent,
+          onStopVolumePreview = viewModel::onStopVolumePreview,
           modifier = modifier,
         )
       }
@@ -556,6 +571,14 @@ internal fun MainDashboardContent(
   onMoveStreamInManualOrder: (VolumeStreamType, Boolean) -> Unit = { _, _ -> },
   onSetSecondaryDrawerExpanded: (Boolean) -> Unit = {},
   onLatchStreamOrder: () -> Unit = {},
+  onToggleVolumePreviewQuick: () -> Unit = {},
+  onSetVolumePreviewEnabled: (Boolean) -> Unit = {},
+  onSetUseSystemSoundsForPreview: (Boolean) -> Unit = {},
+  onSetSilentPreAdjustEnabled: (Boolean) -> Unit = {},
+  onToggleStreamPreview: (VolumeStreamType, Int, VolumePreviewScope, Boolean) -> Unit = { _, _, _, _ -> },
+  onStartStreamLoopPreview: (VolumeStreamType, Int, VolumePreviewScope, Boolean) -> Unit = { _, _, _, _ -> },
+  onUpdateStreamLoopPercent: (VolumeStreamType, Int, VolumePreviewScope) -> Unit = { _, _, _ -> },
+  onStopVolumePreview: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val snackbarHostState = remember { SnackbarHostState() }
@@ -603,6 +626,17 @@ internal fun MainDashboardContent(
       defaultStreams = state.streams,
       streamMinPercents = state.streamMinPercents,
       ringNotificationLinkedDefault = state.ringNotificationLinked,
+      activeVolumePreview = state.activeVolumePreview,
+      onToggleEditorStreamPreview = { type, percent ->
+        onToggleStreamPreview(type, percent, VolumePreviewScope.PROFILE_EDITOR, true)
+      },
+      onStartEditorStreamLoop = { type, percent ->
+        onStartStreamLoopPreview(type, percent, VolumePreviewScope.PROFILE_EDITOR, true)
+      },
+      onUpdateEditorStreamLoopPercent = { type, percent ->
+        onUpdateStreamLoopPercent(type, percent, VolumePreviewScope.PROFILE_EDITOR)
+      },
+      onStopEditorStreamPreview = onStopVolumePreview,
       onSaveProfile = { profile, applyNow ->
         showProfileBottomSheet = false
         editingProfile = null
@@ -840,6 +874,9 @@ internal fun MainDashboardContent(
           onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
           onSetStreamSortMode = onSetStreamSortMode,
           onMoveStreamInManualOrder = onMoveStreamInManualOrder,
+          onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
+          onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
+          onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
           modifier = Modifier.padding(settingsPadding),
         )
       }
@@ -895,6 +932,9 @@ internal fun MainDashboardContent(
       onSetVisibleFixedStreamsCount = onSetVisibleFixedStreamsCount,
       onSetStreamSortMode = onSetStreamSortMode,
       onMoveStreamInManualOrder = onMoveStreamInManualOrder,
+      onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
+      onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
+      onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
     )
   }
 
@@ -1239,6 +1279,9 @@ internal fun MainDashboardContent(
         selectedTab = selectedTab,
         activeAccent = modeAccent,
         onSelectTab = { nextTab ->
+          if (selectedTab != nextTab) {
+            onStopVolumePreview()
+          }
           if (nextTab == MainAppTab.NOW && selectedTab != MainAppTab.NOW) {
             onLatchStreamOrder()
           }
@@ -1256,7 +1299,15 @@ internal fun MainDashboardContent(
           onStreamVolumeChange = onStreamVolumeChange,
           onToggleRingNotificationLink = onToggleRingNotificationLink,
           onSetSecondaryDrawerExpanded = onSetSecondaryDrawerExpanded,
-          onOpenProfilesTab = { selectedTab = MainAppTab.PROFILES },
+          onToggleVolumePreviewQuick = onToggleVolumePreviewQuick,
+          onToggleStreamPreview = onToggleStreamPreview,
+          onStartStreamLoopPreview = onStartStreamLoopPreview,
+          onUpdateStreamLoopPercent = onUpdateStreamLoopPercent,
+          onStopVolumePreview = onStopVolumePreview,
+          onOpenProfilesTab = {
+            onStopVolumePreview()
+            selectedTab = MainAppTab.PROFILES
+          },
           onStartStateTimer = onStartStateTimer,
           onExtendTimer = onExtendTimer,
           onCancelTimer = onCancelTimer,
@@ -1441,6 +1492,11 @@ private fun NowTabContent(
   onStreamVolumeChange: (VolumeStreamType, Int) -> Unit,
   onToggleRingNotificationLink: () -> Unit,
   onSetSecondaryDrawerExpanded: (Boolean) -> Unit,
+  onToggleVolumePreviewQuick: () -> Unit,
+  onToggleStreamPreview: (VolumeStreamType, Int, VolumePreviewScope, Boolean) -> Unit,
+  onStartStreamLoopPreview: (VolumeStreamType, Int, VolumePreviewScope, Boolean) -> Unit,
+  onUpdateStreamLoopPercent: (VolumeStreamType, Int, VolumePreviewScope) -> Unit,
+  onStopVolumePreview: () -> Unit,
   onOpenProfilesTab: () -> Unit,
   onStartStateTimer: (SoundState, Int) -> Unit,
   onExtendTimer: (Int) -> Unit,
@@ -1453,6 +1509,12 @@ private fun NowTabContent(
 ) {
   val haptics = LocalHapticFeedback.current
   val activeProfile = state.profiles.firstOrNull { it.id == state.activeProfileId }
+
+  DisposableEffect(Unit) {
+    onDispose {
+      onStopVolumePreview()
+    }
+  }
 
   LazyColumn(
     modifier = modifier
@@ -1523,16 +1585,15 @@ private fun NowTabContent(
     // Bloco 2: 7 Canais de Volume ZENITH (Barras Fixas 1..7 + Gaveta Expansível Inteligente)
     item {
       VolumeStreamsCard(
-        streams = state.streams,
-        streamMinPercents = state.streamMinPercents,
-        orderedStreams = state.orderedStreams,
-        visibleFixedStreamsCount = state.visibleFixedStreamsCount,
-        ringNotificationLinked = state.ringNotificationLinked,
-        secondaryDrawerExpanded = state.secondaryDrawerExpanded,
-        audioMode = state.audioMode,
+        state = state,
         onStreamVolumeChange = onStreamVolumeChange,
         onToggleRingNotificationLink = onToggleRingNotificationLink,
         onToggleSecondaryDrawer = onSetSecondaryDrawerExpanded,
+        onToggleVolumePreviewQuick = onToggleVolumePreviewQuick,
+        onToggleStreamPreview = onToggleStreamPreview,
+        onStartStreamLoopPreview = onStartStreamLoopPreview,
+        onUpdateStreamLoopPercent = onUpdateStreamLoopPercent,
+        onStopVolumePreview = onStopVolumePreview,
       )
     }
   }
@@ -2139,28 +2200,70 @@ private fun WriteSettingsPermissionBanner(
 
 @Composable
 private fun VolumeStreamsCard(
-  streams: VolumeStreams,
-  streamMinPercents: Map<VolumeStreamType, Int>,
-  orderedStreams: List<VolumeStreamType>,
-  visibleFixedStreamsCount: Int,
-  ringNotificationLinked: Boolean,
-  secondaryDrawerExpanded: Boolean,
-  audioMode: BaseAudioMode,
+  state: MainScreenUiState.Ready,
   onStreamVolumeChange: (VolumeStreamType, Int) -> Unit,
   onToggleRingNotificationLink: () -> Unit,
   onToggleSecondaryDrawer: (Boolean) -> Unit,
+  onToggleVolumePreviewQuick: () -> Unit,
+  onToggleStreamPreview: (VolumeStreamType, Int, VolumePreviewScope, Boolean) -> Unit,
+  onStartStreamLoopPreview: (VolumeStreamType, Int, VolumePreviewScope, Boolean) -> Unit,
+  onUpdateStreamLoopPercent: (VolumeStreamType, Int, VolumePreviewScope) -> Unit,
+  onStopVolumePreview: () -> Unit,
 ) {
   val haptics = LocalHapticFeedback.current
+  val audioMode = state.audioMode
   val activeAccent = audioMode.tonalAccentColor()
-  val normalizedOrder = VolumeStreamType.normalizeManualStreamOrder(orderedStreams)
-  val clampedFixedCount = visibleFixedStreamsCount.coerceIn(1, normalizedOrder.size)
+  val ringNotificationLinked = state.ringNotificationLinked
+  val secondaryDrawerExpanded = state.secondaryDrawerExpanded
+  val normalizedOrder = VolumeStreamType.normalizeManualStreamOrder(state.orderedStreams)
+  val clampedFixedCount = state.visibleFixedStreamsCount.coerceIn(1, normalizedOrder.size)
   val fixedStreams = normalizedOrder.take(clampedFixedCount)
   val drawerStreams = normalizedOrder.drop(clampedFixedCount)
 
   var linkedDragPreviewPercent by remember { mutableStateOf<Int?>(null) }
+  var pendingSilentPreviewRequest by remember { mutableStateOf<Pair<VolumeStreamType, Int>?>(null) }
+
   LaunchedEffect(ringNotificationLinked) {
     if (!ringNotificationLinked) {
       linkedDragPreviewPercent = null
+    }
+  }
+
+  if (pendingSilentPreviewRequest != null) {
+    SilentPreviewConfirmDialog(
+      onKeepMuted = { pendingSilentPreviewRequest = null },
+      onListenNow = {
+        val request = pendingSilentPreviewRequest
+        pendingSilentPreviewRequest = null
+        if (request != null) {
+          val resolvedPercent = if (request.first.isMutedBySilentRinger && request.second <= 0) {
+            65
+          } else {
+            request.second
+          }
+          onToggleStreamPreview(request.first, resolvedPercent, VolumePreviewScope.NOW_TAB, true)
+        }
+      },
+    )
+  }
+
+  fun requestNowTapPreview(streamType: VolumeStreamType, currentPercent: Int) {
+    val isCurrentlyPlayingThis = state.activeVolumePreview?.scope == VolumePreviewScope.NOW_TAB &&
+      state.activeVolumePreview.streamType == streamType
+    if (isCurrentlyPlayingThis) {
+      onStopVolumePreview()
+    } else if (audioMode == BaseAudioMode.SILENT) {
+      pendingSilentPreviewRequest = streamType to currentPercent
+    } else if (state.volumePreviewEnabled) {
+      onToggleStreamPreview(streamType, currentPercent, VolumePreviewScope.NOW_TAB, false)
+    }
+  }
+
+  fun requestNowHoldPreview(streamType: VolumeStreamType, currentPercent: Int) {
+    if (audioMode == BaseAudioMode.SILENT) {
+      pendingSilentPreviewRequest = streamType to currentPercent
+    } else if (state.volumePreviewEnabled) {
+      onStartStreamLoopPreview(streamType, currentPercent, VolumePreviewScope.NOW_TAB, false)
     }
   }
 
@@ -2168,11 +2271,15 @@ private fun VolumeStreamsCard(
   fun RenderStreamCapsule(streamType: VolumeStreamType) {
     val isRingOrNotif =
       streamType == VolumeStreamType.RING || streamType == VolumeStreamType.NOTIFICATION
+    val activePreviewKind = state.activeVolumePreview
+      ?.takeIf { it.scope == VolumePreviewScope.NOW_TAB && it.streamType == streamType }
+      ?.kind
+
     PillVolumeSliderRow(
       type = streamType,
       icon = streamType.streamIcon(),
-      percent = streams.percentFor(streamType),
-      minPercent = (streamMinPercents[streamType] ?: 0).coerceIn(0, 100),
+      percent = state.displayedStreamPercent(streamType),
+      minPercent = state.minPercentFor(streamType),
       accentColor = activeAccent,
       isLinked = if (isRingOrNotif) ringNotificationLinked else null,
       onToggleLink = if (isRingOrNotif) {
@@ -2183,6 +2290,21 @@ private fun VolumeStreamsCard(
         }
       } else {
         null
+      },
+      isPendingForSound = state.isStreamPendingForSound(streamType),
+      activePreviewKind = activePreviewKind,
+      onSingleTapPreview = { requestNowTapPreview(streamType, it) },
+      onDoubleTapPreview = { requestNowTapPreview(streamType, it) },
+      onStartHoldPreview = { requestNowHoldPreview(streamType, it) },
+      onHoldLivePercentChange = {
+        if (audioMode == BaseAudioMode.SOUND && state.volumePreviewEnabled) {
+          onUpdateStreamLoopPercent(streamType, it, VolumePreviewScope.NOW_TAB)
+        }
+      },
+      onStopHoldPreview = { _, _ ->
+        if (state.activeVolumePreview?.scope == VolumePreviewScope.NOW_TAB) {
+          onStopVolumePreview()
+        }
       },
       externalPreviewPercent = if (isRingOrNotif && ringNotificationLinked) {
         linkedDragPreviewPercent
@@ -2223,25 +2345,103 @@ private fun VolumeStreamsCard(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Text(
-          text = AppLabels.Now.volumesTitle,
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
-        )
-        Surface(
-          shape = RoundedCornerShape(50),
-          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.weight(1f).padding(end = 8.dp),
         ) {
           Text(
-            text = AppLabels.Now.channelsBadge(
-              fixedCount = clampedFixedCount,
-              totalCount = normalizedOrder.size,
-            ),
-            style = MaterialTheme.typography.labelSmall,
+            text = AppLabels.Now.volumesTitle,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            maxLines = 1,
           )
+          Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          ) {
+            Text(
+              text = AppLabels.Now.channelsBadge(
+                fixedCount = clampedFixedCount,
+                totalCount = normalizedOrder.size,
+              ),
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              softWrap = false,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+          }
+        }
+
+        val chipIsSilentProtected = audioMode == BaseAudioMode.SILENT
+        val chipIcon = when {
+          chipIsSilentProtected -> Icons.Default.Shield
+          state.volumePreviewEnabled -> Icons.AutoMirrored.Filled.VolumeUp
+          else -> Icons.AutoMirrored.Filled.VolumeOff
+        }
+        val chipLabel = when {
+          chipIsSilentProtected -> AppLabels.Now.previewChipSilentProtectedLabel
+          state.volumePreviewEnabled -> AppLabels.Now.previewChipActiveLabel
+          else -> AppLabels.Now.previewChipMutedLabel
+        }
+        val chipContainer = when {
+          chipIsSilentProtected -> BaseAudioMode.SILENT.tonalContainerColor()
+          state.volumePreviewEnabled -> audioMode.tonalContainerColor()
+          else -> MaterialTheme.colorScheme.surfaceContainerHigh
+        }
+        val chipContent = when {
+          chipIsSilentProtected -> BaseAudioMode.SILENT.onTonalContainerColor()
+          state.volumePreviewEnabled -> audioMode.onTonalContainerColor()
+          else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
+
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = chipContainer,
+          border = BorderStroke(
+            width = 1.dp,
+            color = if (state.volumePreviewEnabled || chipIsSilentProtected) {
+              activeAccent.copy(alpha = 0.35f)
+            } else {
+              MaterialTheme.colorScheme.outlineVariant
+            },
+          ),
+          modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .then(
+              if (!chipIsSilentProtected) {
+                Modifier.clickable {
+                  haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                  onToggleVolumePreviewQuick()
+                }
+              } else {
+                Modifier
+              },
+            )
+            .testTag(AppTestTags.Now.VOLUME_PREVIEW_CHIP),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+          ) {
+            Icon(
+              imageVector = chipIcon,
+              contentDescription = null,
+              tint = chipContent,
+              modifier = Modifier.size(14.dp),
+            )
+            Text(
+              text = chipLabel,
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = chipContent,
+              maxLines = 1,
+              softWrap = false,
+            )
+          }
         }
       }
 
