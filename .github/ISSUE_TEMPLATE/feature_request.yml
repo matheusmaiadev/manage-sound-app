@@ -1,0 +1,73 @@
+name: "Nova Funcionalidade / Evolução (Feature Request)"
+description: "Sugira uma nova funcionalidade, automação contextual ou evolução de UX para o Modos de Som (ZENITH)."
+title: "[FEAT] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Bem-vindo(a) ao Modos de Som (`Manage Sound Mode`)
+        Obrigado por contribuir com a evolução do **Modos de Som** (`com.managesoundmode.app`).
+        Toda proposta deve respeitar os pilares inegociáveis do projeto:
+        - **100% On-Device & Privacy by Design**: zero servidores externos, zero telemetria/analytics e zero anúncios.
+        - **Identidade Visual ZENITH (*Atmospheric Acoustic*)**: superfícies atmosféricas (`Noite Boreal` / `Alvorada Nórdica`), cápsulas táteis e **zero emojis** na UI nativa, Widgets, Quick Settings Tiles ou Notificações (uso exclusivo de ícones vetoriais Material oficiais).
+        - **Determinismo Acústico**: integração previsível com o motor de regras (`RuleEvaluator`) e controle de acesso interno (`RBAC`).
+
+  - type: textarea
+    id: problem_context
+    attributes:
+      label: "Problema / Contexto de Uso"
+      description: "Qual dor real de controle acústico, foco ou automação contextual esta funcionalidade resolve no dia a dia?"
+      placeholder: |
+        Descreva o cenário real do usuário (ex.: transição entre reuniões, pré-ajuste silencioso à noite, automação por local/Wi-Fi) e por que o comportamento atual não atende completamente.
+    validations:
+      required: true
+
+  - type: textarea
+    id: ux_zenith_proposal
+    attributes:
+      label: "Proposta de UX & Design System ZENITH"
+      description: "Como a solução se integra às superfícies ZENITH (`Agora`, `Perfis`, `Horários`, `Locais`, `Ajustes`, Widgets Glance, Quick Settings Tiles ou S3 Notificações na Gaveta)? Lembre-se da regra estrita de zero emojis (apenas ícones Material `Icons.*` / `VectorDrawable`)."
+      placeholder: |
+        - Superfície(s) impactada(s): ex. Aba `Agora` + Widget Glance 4x2
+        - Fluxo de interação / gestos:
+        - Ícones Material e semântica cromática (`Boreal Teal`, `Solar Amber`, `Serene Violet`):
+        - Textos bilíngues (`PT-BR` e `EN` em `AppLabels.kt`):
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: architecture_impact
+    attributes:
+      label: "Impacto nas Camadas da Arquitetura"
+      description: "Selecione todas as camadas da Clean Architecture que serão criadas ou modificadas."
+      options:
+        - label: "`domain` (`RuleEvaluator`, modelos de estado, perfis, regras ou `AppPermission` RBAC)"
+        - label: "`data` (`SoundModeRepository`, `SoundPreferencesDataSource` / DataStore / Backup JSON, `SoundSystemController`)"
+        - label: "`system / receiver / work` (`InternalIntentSecurity`, `AlarmManager`, `BackgroundGeofenceManager`, `SmartNotificationManager`, `SystemZenRuleManager`, `WorkManager`)"
+        - label: "`ui (Compose / ZENITH)` (`MainScreen`, `MainScreenViewModel`, `AppLabels` PT-BR/EN, `AppTestTags`)"
+        - label: "`widget (Glance) / tile (Quick Settings)` (`SoundModeGlanceWidget`, `SoundModeTileService`)"
+        - label: "`docs / specs` (`SPEC-*`, `TASK-*`, `ARCHITECTURE.md`, `DESIGN_SYSTEM.md`, `PRIVACY_POLICY.md`)"
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: "Critérios de Aceite (AC-01..AC-N)"
+      description: "Liste critérios objetivos, testáveis e verificáveis em testes unitários (`testDebugUnitTest`) e instrumentados (`MainScreenTest` / `ManageSoundModeE2ETest`)."
+      placeholder: |
+        - [ ] AC-01: ...
+        - [ ] AC-02: ...
+        - [ ] AC-03: Cobertura de testes unitários e UI/E2E com seletores em `AppTestTags.kt` e labels `PT-BR`/`EN` em `AppLabels.kt`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: privacy_permissions_policy
+    attributes:
+      label: "Privacidade, Permissões & Google Play Policy (Opcional)"
+      description: "Confirme que a proposta permanece 100% on-device e detalhe caso exija alguma permissão sensível do Android (solicitação Just-in-Time, Prominent Disclosure e impacto no Data Safety)."
+      placeholder: |
+        - Execução 100% local (sem rede/telemetria): Sim
+        - Novas permissões Android necessárias (se houver) e justificativa Just-in-Time:
+    validations:
+      required: false

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Reportar Vulnerabilidade de Segurança (Privado)"
+    url: "https://github.com/matheusmaiadev/manage-sound-app/security/advisories/new"
+    about: "Envie relatos de vulnerabilidades de forma confidencial via GitHub Private Vulnerability Reporting diretamente ao mantenedor (@matheusmaiadev)."
+  - name: "Política de Segurança & Arquitetura de Proteção (SECURITY.md)"
+    url: "https://github.com/matheusmaiadev/manage-sound-app/blob/main/SECURITY.md"
+    about: "Consulte as versões suportadas e as diretrizes de segurança 100% On-Device (InternalIntentSecurity, RBAC/PIN, DataStore e SRI)."

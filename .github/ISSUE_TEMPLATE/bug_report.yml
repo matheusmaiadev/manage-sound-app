@@ -1,0 +1,78 @@
+name: "Relato de Bug / Comportamento Inesperado (Bug Report)"
+description: "Reporte uma falha de áudio, automação, permissão, notificação, widget ou interface no Modos de Som."
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Relato Técnico de Bug — Modos de Som (`Manage Sound Mode`)
+        Preencha os campos abaixo com o máximo de precisão para reproduzirmos o cenário de hardware/OEM.
+        > **Atenção (Segurança):** Caso tenha identificado uma vulnerabilidade de segurança (ex.: bypass de `InternalIntentSecurity`, RBAC/PIN ou exposição de dados), **não abra uma Issue pública** — utilize o [Reporte Privado de Vulnerabilidades](https://github.com/matheusmaiadev/manage-sound-app/security/advisories/new).
+
+  - type: input
+    id: app_version
+    attributes:
+      label: "Versão do App (versionName / versionCode)"
+      description: "Consulte em `Ajustes > Sobre & Privacidade` ou nas informações do aplicativo no Android."
+      placeholder: "Ex.: 0.3.1 (8)"
+    validations:
+      required: true
+
+  - type: input
+    id: android_oem
+    attributes:
+      label: "Versão do Android & Fabricante / Aparelho (OEM)"
+      description: "Informe a versão do Android (API), fabricante, modelo e interface OEM."
+      placeholder: "Ex.: Android 16 (API 36) — Pixel 8 / Samsung One UI 7 / Motorola"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: "Passos para Reproduzir"
+      description: "Descreva a sequência exata de ações, regras ativas (Horários, Locais, Timer, Perfil) ou gatilhos de hardware (botões físicos de volume)."
+      placeholder: |
+        1. Abrir a aba '...' ou acionar o Widget / Quick Settings Tile '...'
+        2. Configurar o modo / slider '...'
+        3. Aguardar o disparo da regra / timer '...'
+        4. Observar o estado do áudio no aparelho
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_vs_expected
+    attributes:
+      label: "Comportamento Atual vs. Comportamento Esperado"
+      description: "Compare de forma clara o que ocorreu no aparelho com o que deveria ter acontecido segundo as regras do app."
+      placeholder: |
+        **Comportamento Atual:**
+        ...
+
+        **Comportamento Esperado:**
+        ...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: system_permissions_state
+    attributes:
+      label: "Permissões & Estado do Sistema no Momento do Bug"
+      description: "Marque todas as permissões que estavam concedidas ao Modos de Som quando o problema ocorreu."
+      options:
+        - label: "Acesso ao Não Perturbe (`ACCESS_NOTIFICATION_POLICY`)"
+        - label: "Notificações (`POST_NOTIFICATIONS`)"
+        - label: "Alarmes Exatos (`SCHEDULE_EXACT_ALARM`)"
+        - label: "Localização / Segundo Plano"
+        - label: "Modificar Configurações do Sistema (`WRITE_SETTINGS`)"
+
+  - type: textarea
+    id: logs_screenshots
+    attributes:
+      label: "Logs / Capturas de Tela (sem dados sensíveis)"
+      description: "Opcional: anexe capturas de tela, histórico de transições (`Ajustes > Histórico`) ou trechos relevantes do `adb logcat`. Remova endereços pessoais, coordenadas GPS exatas ou SSIDs privados antes de enviar."
+      placeholder: |
+        Cole aqui logs relevantes (`adb logcat`) ou arraste capturas de tela anonimizadas...
+    validations:
+      required: false
