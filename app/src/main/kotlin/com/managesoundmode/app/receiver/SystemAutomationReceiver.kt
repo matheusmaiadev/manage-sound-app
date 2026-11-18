@@ -11,7 +11,9 @@ import android.os.Build
 import android.util.Log
 import com.managesoundmode.app.ManageSoundApplication
 import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.system.InternalIntentSecurity
 import com.managesoundmode.app.system.LocationProximityHelper
@@ -119,9 +121,13 @@ class SystemAutomationReceiver : BroadcastReceiver() {
           ACTION_NOTIFICATION_START_TIMER -> {
             if (!canChangeSound()) return@launch
             val minutes = intent.getIntExtra(EXTRA_DURATION_MINUTES, 60).coerceIn(1, 720)
-            val currentMode = app.container.soundSystemController.readCurrentMode()
-            val targetMode = if (currentMode == SoundMode.NORMAL) SoundMode.VIBRATE else currentMode
-            repo.startTimedSession(targetMode = targetMode, durationMinutes = minutes)
+            val currentState = app.container.soundSystemController.readSoundState()
+            val targetState = if (currentState.audioMode == BaseAudioMode.SOUND) {
+              SoundState(audioMode = BaseAudioMode.SILENT, vibrateEnabled = true)
+            } else {
+              currentState
+            }
+            repo.startTimedStateSession(targetState = targetState, durationMinutes = minutes)
           }
 
           ACTION_NOTIFICATION_EXTEND_TIMER -> {
@@ -145,6 +151,18 @@ class SystemAutomationReceiver : BroadcastReceiver() {
             val modeRaw = intent.getStringExtra(EXTRA_SOUND_MODE) ?: return@launch
             val targetMode = runCatching { SoundMode.valueOf(modeRaw) }.getOrNull() ?: return@launch
             repo.setSoundMode(targetMode, source = TransitionTriggerSource.WIDGET)
+          }
+
+          ACTION_WIDGET_SET_AUDIO_MODE -> {
+            if (!canChangeSound()) return@launch
+            val audioModeRaw = intent.getStringExtra(EXTRA_BASE_AUDIO_MODE) ?: return@launch
+            val targetAudioMode = runCatching { BaseAudioMode.valueOf(audioModeRaw) }.getOrNull() ?: return@launch
+            repo.setBaseAudioMode(targetAudioMode, source = TransitionTriggerSource.NOTIFICATION)
+          }
+
+          ACTION_WIDGET_TOGGLE_VIBRATE -> {
+            if (!canChangeSound()) return@launch
+            repo.toggleVibrate(source = TransitionTriggerSource.NOTIFICATION)
           }
 
           ACTION_WIDGET_CYCLE_MODE -> {
@@ -188,6 +206,10 @@ class SystemAutomationReceiver : BroadcastReceiver() {
       "com.managesoundmode.app.action.NOTIFICATION_REAPPLY_RULE"
     const val ACTION_WIDGET_SET_MODE =
       "com.managesoundmode.app.action.WIDGET_SET_MODE"
+    const val ACTION_WIDGET_SET_AUDIO_MODE =
+      "com.managesoundmode.app.action.WIDGET_SET_AUDIO_MODE"
+    const val ACTION_WIDGET_TOGGLE_VIBRATE =
+      "com.managesoundmode.app.action.WIDGET_TOGGLE_VIBRATE"
     const val ACTION_WIDGET_CYCLE_MODE =
       "com.managesoundmode.app.action.WIDGET_CYCLE_MODE"
     const val ACTION_ACTIVATE_PROFILE =
@@ -195,6 +217,7 @@ class SystemAutomationReceiver : BroadcastReceiver() {
 
     const val EXTRA_DURATION_MINUTES = "extra_duration_minutes"
     const val EXTRA_SOUND_MODE = "extra_sound_mode"
+    const val EXTRA_BASE_AUDIO_MODE = "extra_base_audio_mode"
     const val EXTRA_PROFILE_ID = "extra_profile_id"
     const val EXTRA_LOCATION_RULE_ID = "extra_location_rule_id"
 

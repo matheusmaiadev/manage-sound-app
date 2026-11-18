@@ -3,6 +3,7 @@ package com.managesoundmode.app.ui.theme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.SoundMode
 
 /**
@@ -132,9 +133,69 @@ fun SoundMode.orbGlowColor(): Color {
  * Cor de contraste sobre o botão/pílula ativa do modo.
  */
 @Composable
-fun SoundMode.onActivePillColor(): Color {
+fun SoundMode.onActivePillColor(): Color = zenithOnActivePillColor()
+
+@Composable
+fun BaseAudioMode.tonalContainerColor(): Color {
+  val isDark = LocalZenithIsDark.current
+  return when (this) {
+    BaseAudioMode.SOUND -> if (isDark) ZenithNormalContainerDark else ZenithNormalContainerLight
+    BaseAudioMode.SILENT -> if (isDark) ZenithSilentContainerDark else ZenithSilentContainerLight
+  }
+}
+
+@Composable
+fun BaseAudioMode.onTonalContainerColor(): Color {
+  val isDark = LocalZenithIsDark.current
+  return when (this) {
+    BaseAudioMode.SOUND -> if (isDark) ZenithNormalOnContainerDark else ZenithNormalOnContainerLight
+    BaseAudioMode.SILENT -> if (isDark) ZenithSilentOnContainerDark else ZenithSilentOnContainerLight
+  }
+}
+
+@Composable
+fun BaseAudioMode.tonalAccentColor(): Color {
+  val isDark = LocalZenithIsDark.current
+  return when (this) {
+    BaseAudioMode.SOUND -> if (isDark) ZenithNormalTealDark else ZenithNormalTealLight
+    BaseAudioMode.SILENT -> if (isDark) ZenithSilentVioletDark else ZenithSilentVioletLight
+  }
+}
+
+@Composable
+fun BaseAudioMode.orbGlowColor(): Color {
+  val isDark = LocalZenithIsDark.current
+  return when (this) {
+    BaseAudioMode.SOUND -> if (isDark) ZenithNormalGlowDark else ZenithNormalGlowLight
+    BaseAudioMode.SILENT -> if (isDark) ZenithSilentGlowDark else ZenithSilentGlowLight
+  }
+}
+
+@Composable
+fun BaseAudioMode.onActivePillColor(): Color = zenithOnActivePillColor()
+
+@Composable
+fun zenithOnActivePillColor(): Color {
   val isDark = LocalZenithIsDark.current
   return if (isDark) Color(0xFF070A10) else Color.White
+}
+
+@Composable
+fun zenithVibrateAccentColor(): Color {
+  val isDark = LocalZenithIsDark.current
+  return if (isDark) ZenithVibrateAmberDark else ZenithVibrateAmberLight
+}
+
+@Composable
+fun zenithVibrateContainerColor(): Color {
+  val isDark = LocalZenithIsDark.current
+  return if (isDark) ZenithVibrateContainerDark else ZenithVibrateContainerLight
+}
+
+@Composable
+fun zenithVibrateOnContainerColor(): Color {
+  val isDark = LocalZenithIsDark.current
+  return if (isDark) ZenithVibrateOnContainerDark else ZenithVibrateOnContainerLight
 }
 
 fun SoundMode.accentColor(): Color = when (this) {

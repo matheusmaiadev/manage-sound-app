@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Permissão necessária para alterar modo Silencioso / DND via NotificationManager & AudioManager -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!-- Permissão sob demanda (Just-in-Time) para alternar vibrate_when_ringing dentro do modo Som -->
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Notificações inteligentes de timer e prompt ao silenciar pelos botões físicos (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -71,6 +77,8 @@
                 <action android:name="com.managesoundmode.app.action.NOTIFICATION_RESTORE_NOW" />
                 <action android:name="com.managesoundmode.app.action.NOTIFICATION_REAPPLY_RULE" />
                 <action android:name="com.managesoundmode.app.action.WIDGET_SET_MODE" />
+                <action android:name="com.managesoundmode.app.action.WIDGET_SET_AUDIO_MODE" />
+                <action android:name="com.managesoundmode.app.action.WIDGET_TOGGLE_VIBRATE" />
                 <action android:name="com.managesoundmode.app.action.WIDGET_CYCLE_MODE" />
                 <action android:name="com.managesoundmode.app.action.ACTIVATE_PROFILE" />
             </intent-filter>

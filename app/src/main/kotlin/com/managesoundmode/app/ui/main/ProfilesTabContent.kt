@@ -128,7 +128,8 @@ private fun ProfileGroupedCard(
   val haptics = LocalHapticFeedback.current
   var showContextMenu by remember { mutableStateOf(false) }
 
-  val modeAccent = profile.mode.tonalAccentColor()
+  val resolvedState = profile.resolvedSoundState
+  val modeAccent = resolvedState.audioMode.tonalAccentColor()
   val containerColor = if (isActive) {
     MaterialTheme.colorScheme.surfaceContainerHigh
   } else {
@@ -305,14 +306,14 @@ private fun ProfileGroupedCard(
         ) {
           Surface(
             shape = RoundedCornerShape(50),
-            color = profile.mode.tonalContainerColor(),
+            color = resolvedState.audioMode.tonalContainerColor(),
             border = BorderStroke(1.dp, modeAccent.copy(alpha = 0.30f)),
           ) {
             Text(
-              text = profile.mode.title,
+              text = resolvedState.title,
               style = MaterialTheme.typography.labelMedium,
               fontWeight = FontWeight.SemiBold,
-              color = profile.mode.onTonalContainerColor(),
+              color = resolvedState.audioMode.onTonalContainerColor(),
               maxLines = 1,
               softWrap = false,
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -328,7 +329,7 @@ private fun ProfileGroupedCard(
                 text = AppLabels.Profiles.activeBadge,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = profile.mode.onActivePillColor(),
+                color = resolvedState.audioMode.onActivePillColor(),
                 maxLines = 1,
                 softWrap = false,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),

@@ -179,7 +179,21 @@ data class SavedStateSnapshot(
   val mode: SoundMode,
   val streams: VolumeStreams,
   val capturedAtEpochMillis: Long,
-)
+  val audioMode: BaseAudioMode? = null,
+  val vibrateEnabled: Boolean? = null,
+) {
+  val resolvedAudioMode: BaseAudioMode
+    get() = audioMode ?: SoundState.fromLegacyMode(mode).audioMode
+
+  val resolvedVibrateEnabled: Boolean
+    get() = vibrateEnabled ?: SoundState.fromLegacyMode(mode).vibrateEnabled
+
+  val resolvedSoundState: SoundState
+    get() = SoundState(
+      audioMode = resolvedAudioMode,
+      vibrateEnabled = resolvedVibrateEnabled,
+    )
+}
 
 @Serializable
 enum class TransitionTriggerSource {
@@ -207,4 +221,18 @@ data class TransitionLogEntry(
   val detail: String,
   val source: TransitionTriggerSource,
   val appliedMode: SoundMode,
-)
+  val audioMode: BaseAudioMode? = null,
+  val vibrateEnabled: Boolean? = null,
+) {
+  val resolvedAudioMode: BaseAudioMode
+    get() = audioMode ?: SoundState.fromLegacyMode(appliedMode).audioMode
+
+  val resolvedVibrateEnabled: Boolean
+    get() = vibrateEnabled ?: SoundState.fromLegacyMode(appliedMode).vibrateEnabled
+
+  val resolvedSoundState: SoundState
+    get() = SoundState(
+      audioMode = resolvedAudioMode,
+      vibrateEnabled = resolvedVibrateEnabled,
+    )
+}

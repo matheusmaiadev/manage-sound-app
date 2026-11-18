@@ -1,12 +1,12 @@
 <resources>
     <!-- Product Identity & System -->
     <string name="app_name">Sound Modes</string>
-    <string name="widget_description">Switch between Sound, Vibrate, Silent and Profiles in 1 tap right from your home screen.</string>
+    <string name="widget_description">Switch between Sound, Silent, Vibrate and Profiles in 1 tap right from your home screen.</string>
 
     <!-- Android Header Quick Settings Tiles Labels -->
     <string name="qs_tile_cycle_label">Sound Mode (Cycle)</string>
     <string name="qs_tile_normal_label">Mode: Sound</string>
-    <string name="qs_tile_vibrate_label">Mode: Vibrate</string>
+    <string name="qs_tile_vibrate_label">Vibrate</string>
     <string name="qs_tile_silent_label">Mode: Silent</string>
     <string name="qs_tile_profile_1_label">Quick Profile 1</string>
     <string name="qs_tile_profile_2_label">Quick Profile 2</string>

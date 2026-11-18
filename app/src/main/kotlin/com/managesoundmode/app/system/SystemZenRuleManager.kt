@@ -11,7 +11,7 @@ import android.service.notification.ZenPolicy
 import android.util.Log
 import com.managesoundmode.app.MainActivity
 import com.managesoundmode.app.R
-import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.receiver.SystemAutomationReceiver
 
@@ -151,9 +151,11 @@ object SystemZenRuleManager {
     val ruleName = "Modos de Som • ${profile.name}"
     val configActivity = ComponentName(context, MainActivity::class.java)
     val ownerReceiver = ComponentName(context, SystemAutomationReceiver::class.java)
-    val interruptionFilter = when (profile.mode) {
-      SoundMode.SILENT -> NotificationManager.INTERRUPTION_FILTER_PRIORITY
-      SoundMode.VIBRATE, SoundMode.NORMAL -> NotificationManager.INTERRUPTION_FILTER_ALL
+    val soundState = profile.resolvedSoundState
+    val interruptionFilter = if (soundState.audioMode == BaseAudioMode.SILENT && !soundState.vibrateEnabled) {
+      NotificationManager.INTERRUPTION_FILTER_PRIORITY
+    } else {
+      NotificationManager.INTERRUPTION_FILTER_ALL
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
@@ -168,7 +170,7 @@ object SystemZenRuleManager {
         .allowAlarms(true)
         .allowMedia(profile.streams.mediaPercent > 0)
         .allowCalls(
-          if (profile.streams.ringPercent > 0) {
+          if (soundState.audioMode == BaseAudioMode.SOUND && profile.streams.ringPercent > 0) {
             ZenPolicy.PEOPLE_TYPE_ANYONE
           } else {
             ZenPolicy.PEOPLE_TYPE_STARRED

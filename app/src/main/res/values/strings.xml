@@ -1,12 +1,12 @@
 <resources>
     <!-- Identidade do Produto e Sistema -->
     <string name="app_name">Modos de Som</string>
-    <string name="widget_description">Alterne entre Som, Vibrar, Silencioso e Perfis em 1 toque direto na tela inicial.</string>
+    <string name="widget_description">Alterne entre Som, Silêncio, Vibrar e Perfis em 1 toque direto na tela inicial.</string>
 
     <!-- Rótulos dos Quick Settings Tiles no Header do Android -->
     <string name="qs_tile_cycle_label">Modo de Som (Ciclo)</string>
     <string name="qs_tile_normal_label">Modo: Som</string>
-    <string name="qs_tile_vibrate_label">Modo: Vibrar</string>
+    <string name="qs_tile_vibrate_label">Vibrar</string>
     <string name="qs_tile_silent_label">Modo: Silêncio</string>
     <string name="qs_tile_profile_1_label">Perfil Rápido 1</string>
     <string name="qs_tile_profile_2_label">Perfil Rápido 2</string>

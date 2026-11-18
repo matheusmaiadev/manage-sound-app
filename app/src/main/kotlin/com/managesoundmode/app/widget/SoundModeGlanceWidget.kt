@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,12 +53,16 @@ import com.managesoundmode.app.ManageSoundApplication
 import com.managesoundmode.app.R
 import com.managesoundmode.app.data.local.PersistedSoundPrefs
 import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.DeviceSoundSnapshot
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.ui.common.AppLabels
+import com.managesoundmode.app.ui.common.AppLanguage
 import kotlinx.coroutines.flow.first
 
 class SoundModeWidgetReceiver : GlanceAppWidgetReceiver() {
@@ -79,6 +84,14 @@ class SoundModeWidgetActionCallback : ActionCallback {
 
     val command = parameters[KEY_COMMAND] ?: return
     when (command) {
+      CMD_SET_AUDIO_MODE -> {
+        val rawAudioMode = parameters[KEY_AUDIO_MODE] ?: return
+        val audioMode = runCatching { BaseAudioMode.valueOf(rawAudioMode) }.getOrNull() ?: return
+        repo.setBaseAudioMode(audioMode, source = TransitionTriggerSource.WIDGET)
+      }
+      CMD_TOGGLE_VIBRATE -> {
+        repo.toggleVibrate(source = TransitionTriggerSource.WIDGET)
+      }
       CMD_SET_MODE -> {
         val rawMode = parameters[KEY_MODE] ?: return
         val mode = runCatching { SoundMode.valueOf(rawMode) }.getOrNull() ?: return
@@ -104,8 +117,11 @@ class SoundModeWidgetActionCallback : ActionCallback {
   companion object {
     val KEY_COMMAND = ActionParameters.Key<String>("widget_cmd")
     val KEY_MODE = ActionParameters.Key<String>("widget_mode")
+    val KEY_AUDIO_MODE = ActionParameters.Key<String>("widget_audio_mode")
 
     const val CMD_SET_MODE = "set_mode"
+    const val CMD_SET_AUDIO_MODE = "set_audio_mode"
+    const val CMD_TOGGLE_VIBRATE = "toggle_vibrate"
     const val CMD_CYCLE_MODE = "cycle_mode"
     const val CMD_CYCLE_PROFILE = "cycle_profile"
   }
@@ -118,9 +134,11 @@ private data class WidgetPalette(
   val bannerSubtitle: ColorProvider,
   val badgeBg: ColorProvider,
   val badgeContent: ColorProvider,
-  val activeButtonBg: ColorProvider,
+  val capsuleContainerBg: ColorProvider,
+  val soundActiveBg: ColorProvider,
+  val silentActiveBg: ColorProvider,
+  val vibrateActiveBg: ColorProvider,
   val activeButtonContent: ColorProvider,
-  val inactiveButtonBg: ColorProvider,
   val inactiveButtonContent: ColorProvider,
 )
 
@@ -139,14 +157,16 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
     val repo = app?.container?.soundModeRepository
     val controller = app?.container?.soundSystemController
 
-    val initialMode = controller?.readCurrentMode() ?: SoundMode.NORMAL
+    val initialState = controller?.readSoundState() ?: SoundState.DEFAULT
     val initialStreams = controller?.readVolumeStreams() ?: VolumeStreams()
     val initialPrefs = repo?.preferencesStream?.first() ?: PersistedSoundPrefs()
     val initialProfiles = repo?.profilesStream?.first() ?: SoundProfile.defaultPresets
     val initialSnapshot = DeviceSoundSnapshot(
-      currentMode = initialMode,
+      currentMode = initialState.toLegacyApproximation(),
+      currentSoundState = initialState,
       streams = initialStreams,
       hasDndPermission = controller?.hasDndPermission() ?: true,
+      canWriteSystemSettings = controller?.canWriteSystemSettings() ?: true,
       activeProfileId = initialPrefs.activeProfileId,
       activeTimer = initialPrefs.activeTimer,
     )
@@ -169,15 +189,21 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
           androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(initialProfiles) }
         }
 
+        val resolvedLang = runCatching { AppLanguage.valueOf(prefs.appLanguageCode) }
+          .getOrDefault(AppLanguage.PT_BR)
+        if (AppLabels.currentLanguage != resolvedLang) {
+          AppLabels.currentLanguage = resolvedLang
+        }
+
         val activeProfile = profiles.firstOrNull { it.id == snapshot.activeProfileId }
         val remainingMinutes = prefs.activeTimer?.remainingMinutes(System.currentTimeMillis())
         val isDark = resolveDarkTheme(context, prefs.themeMode)
-        val palette = rememberWidgetPalette(snapshot.currentMode, isDark)
+        val palette = rememberWidgetPalette(snapshot.currentSoundState, isDark)
 
         PureHeroWidgetLayout(
           context = context,
           size = LocalSize.current,
-          currentMode = snapshot.currentMode,
+          soundState = snapshot.currentSoundState,
           streams = snapshot.streams,
           activeProfile = activeProfile,
           remainingTimerMinutes = remainingMinutes?.takeIf { it > 0 },
@@ -191,17 +217,16 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
   private fun PureHeroWidgetLayout(
     context: Context,
     size: DpSize,
-    currentMode: SoundMode,
+    soundState: SoundState,
     streams: VolumeStreams,
     activeProfile: SoundProfile?,
     remainingTimerMinutes: Int?,
     palette: WidgetPalette,
   ) {
-    // Se o usuário redimensionou para 1 linha fina (< 105.dp), usa a barra compacta
     if (size.height < 105.dp) {
       CompactSingleRowHeroWidget(
         context = context,
-        currentMode = currentMode,
+        soundState = soundState,
         streams = streams,
         activeProfile = activeProfile,
         palette = palette,
@@ -209,7 +234,6 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
       return
     }
 
-    // Proposta A (Recomendada): Pure Hero Card 2 Andares (idêntico ao Hero Card da aba Agora)
     Column(
       modifier = GlanceModifier
         .fillMaxSize()
@@ -218,10 +242,9 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
         .padding(14.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // Andar 1: Banner Tonal do Modo Atual + Chip de Perfil Ativo
       HeroTonalBanner(
         context = context,
-        currentMode = currentMode,
+        soundState = soundState,
         streams = streams,
         activeProfile = activeProfile,
         remainingTimerMinutes = remainingTimerMinutes,
@@ -230,9 +253,9 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
 
       Spacer(modifier = GlanceModifier.height(10.dp))
 
-      // Andar 2: Dock Expressivo dos 3 Modos (Som | Vibrar | Silêncio)
+      // Split Capsule 2 + 1: [Som | Silêncio] + [Vibrar] independente
       HeroModesSelectorRow(
-        currentMode = currentMode,
+        soundState = soundState,
         palette = palette,
       )
     }
@@ -241,20 +264,17 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
   @Composable
   private fun HeroTonalBanner(
     context: Context,
-    currentMode: SoundMode,
+    soundState: SoundState,
     streams: VolumeStreams,
     activeProfile: SoundProfile?,
     remainingTimerMinutes: Int?,
     palette: WidgetPalette,
   ) {
-    // Subtítulo curto e útil que NUNCA trunca com reticências
-    val cleanSubtitle = when {
-      remainingTimerMinutes != null -> "Timer: ${remainingTimerMinutes}m • Mídia ${streams.mediaPercent}%"
-      currentMode == SoundMode.NORMAL -> "Toque ${streams.ringPercent}% • Mídia ${streams.mediaPercent}%"
-      currentMode == SoundMode.VIBRATE -> "Alerta tátil • Mídia ${streams.mediaPercent}%"
-      SoundMode.SILENT == currentMode -> "Zero ruído • Alarme ${streams.alarmPercent}%"
-      else -> "Mídia ${streams.mediaPercent}%"
-    }
+    val cleanSubtitle = AppLabels.Widget.heroSubtitle(
+      state = soundState,
+      streams = streams,
+      remainingTimerMinutes = remainingTimerMinutes,
+    )
 
     Row(
       modifier = GlanceModifier
@@ -265,7 +285,6 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
         .padding(horizontal = 14.dp, vertical = 14.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // Avatar Circular do Modo (44.dp)
       Box(
         modifier = GlanceModifier
           .size(44.dp)
@@ -274,8 +293,8 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
         contentAlignment = Alignment.Center,
       ) {
         Image(
-          provider = ImageProvider(modeDrawableRes(currentMode)),
-          contentDescription = currentMode.title,
+          provider = ImageProvider(audioModeDrawableRes(soundState.audioMode)),
+          contentDescription = soundState.title,
           colorFilter = ColorFilter.tint(palette.badgeContent),
           modifier = GlanceModifier.size(22.dp),
         )
@@ -283,13 +302,12 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
 
       Spacer(modifier = GlanceModifier.width(12.dp))
 
-      // Título + Métricas Diretas (sem truncar)
       Column(modifier = GlanceModifier.defaultWeight()) {
         Text(
-          text = currentMode.title,
+          text = soundState.title,
           style = TextStyle(
             color = palette.bannerTitle,
-            fontSize = 18.sp,
+            fontSize = 17.sp,
             fontWeight = FontWeight.Bold,
           ),
           maxLines = 1,
@@ -307,7 +325,6 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
 
       Spacer(modifier = GlanceModifier.width(8.dp))
 
-      // Chip do Perfil Ativo à direita (tocar alterna entre os perfis direto no widget!)
       Box(
         modifier = GlanceModifier
           .cornerRadius(16.dp)
@@ -331,7 +348,7 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
           )
           Spacer(modifier = GlanceModifier.width(5.dp))
           Text(
-            text = activeProfile?.name ?: "Perfis",
+            text = activeProfile?.name ?: AppLabels.Widget.profilesFallback,
             style = TextStyle(
               color = palette.badgeContent,
               fontSize = 12.sp,
@@ -344,70 +361,130 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
     }
   }
 
+  /**
+   * Split Capsule `2 + 1` para o Widget Hero 4x2:
+   * - Cápsula esquerda (`defaultWeight()`): Segmented exclusivo `[ Som | Silêncio ]`
+   * - Cápsula direita (`98.dp`): Toggle ortogonal independente `[ Vibrar ]`
+   */
   @Composable
   private fun HeroModesSelectorRow(
-    currentMode: SoundMode,
+    soundState: SoundState,
     palette: WidgetPalette,
   ) {
     Row(
       modifier = GlanceModifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      HeroModeButton(
-        modifier = GlanceModifier.defaultWeight(),
-        label = "Som",
-        iconRes = R.drawable.ic_widget_volume_up,
-        selected = currentMode == SoundMode.NORMAL,
-        targetMode = SoundMode.NORMAL,
-        palette = palette,
-      )
+      // Cápsula Esquerda (2/3): [ Som | Silêncio ]
+      Row(
+        modifier = GlanceModifier
+          .defaultWeight()
+          .height(50.dp)
+          .cornerRadius(24.dp)
+          .background(palette.capsuleContainerBg)
+          .padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        HeroAudioModeButton(
+          modifier = GlanceModifier.defaultWeight(),
+          label = AppLabels.Now.audioModeShortPill(BaseAudioMode.SOUND),
+          iconRes = R.drawable.ic_widget_volume_up,
+          selected = soundState.audioMode == BaseAudioMode.SOUND,
+          activeBg = palette.soundActiveBg,
+          targetAudioMode = BaseAudioMode.SOUND,
+          palette = palette,
+        )
+        Spacer(modifier = GlanceModifier.width(4.dp))
+        HeroAudioModeButton(
+          modifier = GlanceModifier.defaultWeight(),
+          label = AppLabels.Now.audioModeShortPill(BaseAudioMode.SILENT),
+          iconRes = R.drawable.ic_widget_silent,
+          selected = soundState.audioMode == BaseAudioMode.SILENT,
+          activeBg = palette.silentActiveBg,
+          targetAudioMode = BaseAudioMode.SILENT,
+          palette = palette,
+        )
+      }
+
       Spacer(modifier = GlanceModifier.width(8.dp))
-      HeroModeButton(
-        modifier = GlanceModifier.defaultWeight(),
-        label = "Vibrar",
-        iconRes = R.drawable.ic_widget_vibration,
-        selected = currentMode == SoundMode.VIBRATE,
-        targetMode = SoundMode.VIBRATE,
-        palette = palette,
-      )
-      Spacer(modifier = GlanceModifier.width(8.dp))
-      HeroModeButton(
-        modifier = GlanceModifier.defaultWeight(),
-        label = "Silêncio",
-        iconRes = R.drawable.ic_widget_silent,
-        selected = currentMode == SoundMode.SILENT,
-        targetMode = SoundMode.SILENT,
-        palette = palette,
-      )
+
+      // Cápsula Direita (1/3): Toggle independente [ Vibrar ]
+      val vibBg = if (soundState.vibrateEnabled) {
+        palette.vibrateActiveBg
+      } else {
+        palette.capsuleContainerBg
+      }
+      val vibContent = if (soundState.vibrateEnabled) {
+        palette.activeButtonContent
+      } else {
+        palette.inactiveButtonContent
+      }
+
+      Box(
+        modifier = GlanceModifier
+          .width(98.dp)
+          .height(50.dp)
+          .cornerRadius(24.dp)
+          .background(vibBg)
+          .clickable(
+            actionRunCallback<SoundModeWidgetActionCallback>(
+              actionParametersOf(
+                SoundModeWidgetActionCallback.KEY_COMMAND to SoundModeWidgetActionCallback.CMD_TOGGLE_VIBRATE,
+              ),
+            ),
+          )
+          .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+      ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Image(
+            provider = ImageProvider(R.drawable.ic_widget_vibration),
+            contentDescription = AppLabels.Now.vibrateToggleContentDescription(soundState.vibrateEnabled),
+            colorFilter = ColorFilter.tint(vibContent),
+            modifier = GlanceModifier.size(17.dp),
+          )
+          Spacer(modifier = GlanceModifier.width(5.dp))
+          Text(
+            text = AppLabels.Now.vibrateShortPill,
+            style = TextStyle(
+              color = vibContent,
+              fontSize = 13.sp,
+              fontWeight = if (soundState.vibrateEnabled) FontWeight.Bold else FontWeight.Medium,
+            ),
+            maxLines = 1,
+          )
+        }
+      }
     }
   }
 
   @Composable
-  private fun HeroModeButton(
+  private fun HeroAudioModeButton(
     modifier: GlanceModifier,
     label: String,
     iconRes: Int,
     selected: Boolean,
-    targetMode: SoundMode,
+    activeBg: ColorProvider,
+    targetAudioMode: BaseAudioMode,
     palette: WidgetPalette,
   ) {
-    val bgColor = if (selected) palette.activeButtonBg else palette.inactiveButtonBg
+    val bgColor = if (selected) activeBg else palette.capsuleContainerBg
     val contentColor = if (selected) palette.activeButtonContent else palette.inactiveButtonContent
 
     Box(
       modifier = modifier
-        .height(48.dp)
-        .cornerRadius(if (selected) 20.dp else 16.dp)
+        .height(42.dp)
+        .cornerRadius(19.dp)
         .background(bgColor)
         .clickable(
           actionRunCallback<SoundModeWidgetActionCallback>(
             actionParametersOf(
-              SoundModeWidgetActionCallback.KEY_COMMAND to SoundModeWidgetActionCallback.CMD_SET_MODE,
-              SoundModeWidgetActionCallback.KEY_MODE to targetMode.name,
+              SoundModeWidgetActionCallback.KEY_COMMAND to SoundModeWidgetActionCallback.CMD_SET_AUDIO_MODE,
+              SoundModeWidgetActionCallback.KEY_AUDIO_MODE to targetAudioMode.name,
             ),
           ),
         )
-        .padding(horizontal = 10.dp),
+        .padding(horizontal = 8.dp),
       contentAlignment = Alignment.Center,
     ) {
       Row(verticalAlignment = Alignment.CenterVertically) {
@@ -415,9 +492,9 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
           provider = ImageProvider(iconRes),
           contentDescription = null,
           colorFilter = ColorFilter.tint(contentColor),
-          modifier = GlanceModifier.size(18.dp),
+          modifier = GlanceModifier.size(17.dp),
         )
-        Spacer(modifier = GlanceModifier.width(6.dp))
+        Spacer(modifier = GlanceModifier.width(5.dp))
         Text(
           text = label,
           style = TextStyle(
@@ -431,10 +508,13 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
     }
   }
 
+  /**
+   * Widget Compacto (`2x1` / `4x1`) com Split Capsule `2 + 1` de ícones vetoriais.
+   */
   @Composable
   private fun CompactSingleRowHeroWidget(
     context: Context,
-    currentMode: SoundMode,
+    soundState: SoundState,
     streams: VolumeStreams,
     activeProfile: SoundProfile?,
     palette: WidgetPalette,
@@ -461,25 +541,25 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
           contentAlignment = Alignment.Center,
         ) {
           Image(
-            provider = ImageProvider(modeDrawableRes(currentMode)),
-            contentDescription = currentMode.title,
-            colorFilter = ColorFilter.tint(palette.bannerTitle),
+            provider = ImageProvider(audioModeDrawableRes(soundState.audioMode)),
+            contentDescription = soundState.title,
+            colorFilter = ColorFilter.tint(palette.badgeContent),
             modifier = GlanceModifier.size(20.dp),
           )
         }
         Spacer(modifier = GlanceModifier.width(10.dp))
         Column {
           Text(
-            text = currentMode.title,
+            text = soundState.title,
             style = TextStyle(
               color = palette.bannerTitle,
-              fontSize = 15.sp,
+              fontSize = 14.sp,
               fontWeight = FontWeight.Bold,
             ),
             maxLines = 1,
           )
           Text(
-            text = "${activeProfile?.name ?: "Manual"} • Mídia ${streams.mediaPercent}%",
+            text = AppLabels.Widget.compactSubtitle(activeProfile?.name, streams.mediaPercent),
             style = TextStyle(
               color = palette.inactiveButtonContent,
               fontSize = 11.sp,
@@ -489,48 +569,91 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
         }
       }
 
-      CompactIconPill(
-        iconRes = R.drawable.ic_widget_volume_up,
-        selected = currentMode == SoundMode.NORMAL,
-        targetMode = SoundMode.NORMAL,
-        palette = palette,
-      )
+      // Segmented Audio Pill [Som | Silêncio]
+      Row(
+        modifier = GlanceModifier
+          .cornerRadius(18.dp)
+          .background(palette.capsuleContainerBg)
+          .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        CompactAudioIconPill(
+          iconRes = R.drawable.ic_widget_volume_up,
+          contentDescription = BaseAudioMode.SOUND.title,
+          selected = soundState.audioMode == BaseAudioMode.SOUND,
+          activeBg = palette.soundActiveBg,
+          targetAudioMode = BaseAudioMode.SOUND,
+          palette = palette,
+        )
+        Spacer(modifier = GlanceModifier.width(4.dp))
+        CompactAudioIconPill(
+          iconRes = R.drawable.ic_widget_silent,
+          contentDescription = BaseAudioMode.SILENT.title,
+          selected = soundState.audioMode == BaseAudioMode.SILENT,
+          activeBg = palette.silentActiveBg,
+          targetAudioMode = BaseAudioMode.SILENT,
+          palette = palette,
+        )
+      }
+
       Spacer(modifier = GlanceModifier.width(6.dp))
-      CompactIconPill(
-        iconRes = R.drawable.ic_widget_vibration,
-        selected = currentMode == SoundMode.VIBRATE,
-        targetMode = SoundMode.VIBRATE,
-        palette = palette,
-      )
-      Spacer(modifier = GlanceModifier.width(6.dp))
-      CompactIconPill(
-        iconRes = R.drawable.ic_widget_silent,
-        selected = currentMode == SoundMode.SILENT,
-        targetMode = SoundMode.SILENT,
-        palette = palette,
-      )
+
+      // Orthogonal Vibrate Toggle Pill [Vibrar]
+      val vibBg = if (soundState.vibrateEnabled) {
+        palette.vibrateActiveBg
+      } else {
+        palette.capsuleContainerBg
+      }
+      val vibTint = if (soundState.vibrateEnabled) {
+        palette.activeButtonContent
+      } else {
+        palette.inactiveButtonContent
+      }
+      Box(
+        modifier = GlanceModifier
+          .size(42.dp)
+          .cornerRadius(18.dp)
+          .background(vibBg)
+          .clickable(
+            actionRunCallback<SoundModeWidgetActionCallback>(
+              actionParametersOf(
+                SoundModeWidgetActionCallback.KEY_COMMAND to SoundModeWidgetActionCallback.CMD_TOGGLE_VIBRATE,
+              ),
+            ),
+          ),
+        contentAlignment = Alignment.Center,
+      ) {
+        Image(
+          provider = ImageProvider(R.drawable.ic_widget_vibration),
+          contentDescription = AppLabels.Now.vibrateToggleContentDescription(soundState.vibrateEnabled),
+          colorFilter = ColorFilter.tint(vibTint),
+          modifier = GlanceModifier.size(18.dp),
+        )
+      }
     }
   }
 
   @Composable
-  private fun CompactIconPill(
+  private fun CompactAudioIconPill(
     iconRes: Int,
+    contentDescription: String,
     selected: Boolean,
-    targetMode: SoundMode,
+    activeBg: ColorProvider,
+    targetAudioMode: BaseAudioMode,
     palette: WidgetPalette,
   ) {
-    val bg = if (selected) palette.activeButtonBg else palette.inactiveButtonBg
+    val bg = if (selected) activeBg else palette.capsuleContainerBg
     val tint = if (selected) palette.activeButtonContent else palette.inactiveButtonContent
     Box(
       modifier = GlanceModifier
-        .size(40.dp)
-        .cornerRadius(14.dp)
+        .size(36.dp)
+        .cornerRadius(15.dp)
         .background(bg)
         .clickable(
           actionRunCallback<SoundModeWidgetActionCallback>(
             actionParametersOf(
-              SoundModeWidgetActionCallback.KEY_COMMAND to SoundModeWidgetActionCallback.CMD_SET_MODE,
-              SoundModeWidgetActionCallback.KEY_MODE to targetMode.name,
+              SoundModeWidgetActionCallback.KEY_COMMAND to SoundModeWidgetActionCallback.CMD_SET_AUDIO_MODE,
+              SoundModeWidgetActionCallback.KEY_AUDIO_MODE to targetAudioMode.name,
             ),
           ),
         ),
@@ -538,9 +661,9 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
     ) {
       Image(
         provider = ImageProvider(iconRes),
-        contentDescription = targetMode.title,
+        contentDescription = contentDescription,
         colorFilter = ColorFilter.tint(tint),
-        modifier = GlanceModifier.size(18.dp),
+        modifier = GlanceModifier.size(17.dp),
       )
     }
   }
@@ -556,32 +679,22 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
     }
   }
 
-  private fun rememberWidgetPalette(mode: SoundMode, isDark: Boolean): WidgetPalette {
+  private fun rememberWidgetPalette(soundState: SoundState, isDark: Boolean): WidgetPalette {
     if (isDark) {
       // Zenith — Noite Boreal (Dark Mode)
-      val (bannerBg, bannerTitle, bannerSub, badgeBg, badgeContent, activeBtnBg) = when (mode) {
-        SoundMode.NORMAL -> Sextuple(
+      val (bannerBg, bannerTitle, bannerSub, badgeBg, badgeContent) = when (soundState.audioMode) {
+        BaseAudioMode.SOUND -> Quintuple(
           Color(0xFF0E2926),
           Color(0xFFF0F4FC),
           Color(0xFF99F6E4),
           Color(0xFF133A36),
           Color(0xFF2DD4BF),
-          Color(0xFF2DD4BF),
         )
-        SoundMode.VIBRATE -> Sextuple(
-          Color(0xFF291D0A),
-          Color(0xFFF0F4FC),
-          Color(0xFFFDE68A),
-          Color(0xFF3B2A0F),
-          Color(0xFFFBBF24),
-          Color(0xFFFBBF24),
-        )
-        SoundMode.SILENT -> Sextuple(
+        BaseAudioMode.SILENT -> Quintuple(
           Color(0xFF1D1536),
           Color(0xFFF0F4FC),
           Color(0xFFDDD6FE),
           Color(0xFF2B1F4F),
-          Color(0xFFA78BFA),
           Color(0xFFA78BFA),
         )
       }
@@ -592,36 +705,28 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
         bannerSubtitle = ColorProvider(bannerSub),
         badgeBg = ColorProvider(badgeBg),
         badgeContent = ColorProvider(badgeContent),
-        activeButtonBg = ColorProvider(activeBtnBg),
-        activeButtonContent = ColorProvider(Color(0xFF061614)),
-        inactiveButtonBg = ColorProvider(Color(0xFF101624)),
-        inactiveButtonContent = ColorProvider(Color(0xFF8B9BB8)),
+        capsuleContainerBg = ColorProvider(Color(0xFF161F33)),
+        soundActiveBg = ColorProvider(Color(0xFF2DD4BF)),
+        silentActiveBg = ColorProvider(Color(0xFFA78BFA)),
+        vibrateActiveBg = ColorProvider(Color(0xFFFBBF24)),
+        activeButtonContent = ColorProvider(Color(0xFF070A10)),
+        inactiveButtonContent = ColorProvider(Color(0xFF94A3B8)),
       )
     } else {
       // Zenith — Alvorada Nórdica (Light Mode)
-      val (bannerBg, bannerTitle, bannerSub, badgeBg, badgeContent, activeBtnBg) = when (mode) {
-        SoundMode.NORMAL -> Sextuple(
+      val (bannerBg, bannerTitle, bannerSub, badgeBg, badgeContent) = when (soundState.audioMode) {
+        BaseAudioMode.SOUND -> Quintuple(
           Color(0xFFCCFBF1),
           Color(0xFF0B1C1A),
           Color(0xFF115E59),
           Color(0xFFFFFFFF),
           Color(0xFF0F766E),
-          Color(0xFF0F766E),
         )
-        SoundMode.VIBRATE -> Sextuple(
-          Color(0xFFFEF3C7),
-          Color(0xFF241504),
-          Color(0xFF92400E),
-          Color(0xFFFFFFFF),
-          Color(0xFFB45309),
-          Color(0xFFB45309),
-        )
-        SoundMode.SILENT -> Sextuple(
+        BaseAudioMode.SILENT -> Quintuple(
           Color(0xFFEDE9FE),
           Color(0xFF1E1038),
           Color(0xFF5B21B6),
           Color(0xFFFFFFFF),
-          Color(0xFF6D28D9),
           Color(0xFF6D28D9),
         )
       }
@@ -632,36 +737,38 @@ class SoundModeGlanceWidget : GlanceAppWidget() {
         bannerSubtitle = ColorProvider(bannerSub),
         badgeBg = ColorProvider(badgeBg),
         badgeContent = ColorProvider(badgeContent),
-        activeButtonBg = ColorProvider(activeBtnBg),
+        capsuleContainerBg = ColorProvider(Color(0xFFEAE6DF)),
+        soundActiveBg = ColorProvider(Color(0xFF0F766E)),
+        silentActiveBg = ColorProvider(Color(0xFF6D28D9)),
+        vibrateActiveBg = ColorProvider(Color(0xFFB45309)),
         activeButtonContent = ColorProvider(Color(0xFFFFFFFF)),
-        inactiveButtonBg = ColorProvider(Color(0xFFEAE6DF)),
         inactiveButtonContent = ColorProvider(Color(0xFF475569)),
       )
     }
   }
 
-  private data class Sextuple<A, B, C, D, E, F>(
+  private data class Quintuple<A, B, C, D, E>(
     val first: A,
     val second: B,
     val third: C,
     val fourth: D,
     val fifth: E,
-    val sixth: F,
   )
 
-  private fun modeDrawableRes(mode: SoundMode): Int = when (mode) {
-    SoundMode.NORMAL -> R.drawable.ic_widget_volume_up
-    SoundMode.VIBRATE -> R.drawable.ic_widget_vibration
-    SoundMode.SILENT -> R.drawable.ic_widget_silent
+  private fun audioModeDrawableRes(audioMode: BaseAudioMode): Int = when (audioMode) {
+    BaseAudioMode.SOUND -> R.drawable.ic_widget_volume_up
+    BaseAudioMode.SILENT -> R.drawable.ic_widget_silent
   }
 
   companion object {
+    private const val TAG = "SoundModeGlanceWidget"
     private val COMPACT_BAR = DpSize(180.dp, 72.dp)
     private val HERO_CARD_STANDARD = DpSize(260.dp, 130.dp)
     private val HERO_CARD_LARGE = DpSize(320.dp, 160.dp)
 
     suspend fun refreshAllWidgets(context: Context) {
       runCatching { SoundModeGlanceWidget().updateAll(context) }
+        .onFailure { Log.w(TAG, "Falha ao atualizar widgets Glance", it) }
     }
 
     fun requestPinWidget(context: Context): Boolean {

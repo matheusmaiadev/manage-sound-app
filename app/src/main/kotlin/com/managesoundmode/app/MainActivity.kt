@@ -15,7 +15,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.managesoundmode.app.data.local.PersistedSoundPrefs
 import com.managesoundmode.app.domain.model.AppPermission
-import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.system.AppShortcutsManager
 import com.managesoundmode.app.system.InternalIntentSecurity
@@ -70,7 +71,10 @@ class MainActivity : ComponentActivity() {
       }
       when (actionKey) {
         AppShortcutsManager.ACTION_SILENCE_1H -> {
-          repo.startTimedSession(targetMode = SoundMode.VIBRATE, durationMinutes = 60)
+          repo.startTimedStateSession(
+            targetState = SoundState(audioMode = BaseAudioMode.SILENT, vibrateEnabled = true),
+            durationMinutes = 60,
+          )
         }
         else -> {
           val profileId = AppShortcutsManager.resolveProfileIdForShortcut(actionKey) ?: return@launch

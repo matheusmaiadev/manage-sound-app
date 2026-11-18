@@ -4,21 +4,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import com.managesoundmode.app.domain.model.AccessControlConfig
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
@@ -204,9 +208,9 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag(AppTestTags.Now.REAPPLY_RULE_BUTTON).performClick()
     assertTrue(reapplyClicked)
 
-    // UC-05: Alternar modos pelo Hero Card
+    // UC-05: Alternar modos pelo Hero Card (Split Capsule 2+1: desligar Vibrar dentro de Silêncio -> Silêncio Total)
     composeTestRule.onNodeWithTag(AppTestTags.Now.HERO_MODE_CARD).assertIsDisplayed()
-    composeTestRule.onNodeWithTag(AppTestTags.Now.modeButton(SoundMode.SILENT)).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).performClick()
     assertEquals(SoundMode.SILENT, selectedMode)
 
     // UC-07: Iniciar Timer Contextual de 30m, estender +30m e cancelar/restaurar
@@ -228,7 +232,10 @@ class MainScreenTest {
     }
 
     // UC-09: Clicar no Chip do Perfil Ativo navega para a aba Perfis
-    composeTestRule.onNodeWithTag(AppTestTags.Now.ACTIVE_PROFILE_CHIP).performClick()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Now.ACTIVE_PROFILE_CHIP)
+      .performScrollTo()
+      .performClick()
     composeTestRule.onNodeWithTag(AppTestTags.Profiles.LIST).assertIsDisplayed()
   }
 
@@ -623,9 +630,15 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
 
     // UC-30a: Sub-tela 5 — Permissões & Diagnóstico
-    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_PERMISSIONS).performScrollTo().performClick()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Settings.CATEGORY_PERMISSIONS))
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_PERMISSIONS).performClick()
     reopenedOnboarding = false
-    composeTestRule.onNodeWithTag(AppTestTags.Settings.REOPEN_ONBOARDING_BUTTON).performClick()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.REOPEN_ONBOARDING_BUTTON)
+      .performScrollTo()
+      .performClick()
     assertTrue(reopenedOnboarding)
 
     // Reabrir Ajustes para testar sub-telas 6, 7 e 8
@@ -633,24 +646,36 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_SETTINGS).performClick()
 
     // UC-30b: Sub-tela 6 — Histórico de Transições (Filtros + Limpar)
-    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_HISTORY).performScrollTo().performClick()
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Settings.CATEGORY_HISTORY))
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_HISTORY).performClick()
     composeTestRule.onNodeWithTag(AppTestTags.Settings.historyFilterChip("MANUAL")).performClick()
     composeTestRule.onNodeWithText("Modo alterado para Vibrar").assertIsDisplayed()
     composeTestRule.onNodeWithTag(AppTestTags.Settings.CLEAR_HISTORY_BUTTON).performClick()
     assertTrue(clearedLogs)
     composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
 
-    // UC-30c: Sub-tela 7 — Backup JSON & Restaurar Padrões
-    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET).performScrollTo().performClick()
+    // UC-30c: Sub-tela 7 — Sobre o Modos de Som & Privacidade
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Settings.CATEGORY_ABOUT))
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_ABOUT).performClick()
+    composeTestRule
+      .onNodeWithText(AppLabels.Settings.privacyCommitmentTitle)
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
+
+    // UC-30d: Sub-tela 8 — Backup JSON & Restaurar Padrões
+    composeTestRule
+      .onNodeWithTag(AppTestTags.Settings.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET))
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET).performClick()
     composeTestRule.onNodeWithTag(AppTestTags.Settings.EXPORT_BACKUP_BUTTON).performClick()
     assertTrue(exportedBackup)
     composeTestRule.onNodeWithTag(AppTestTags.Settings.IMPORT_BACKUP_BUTTON).performClick()
     assertEquals("{\"version\":1}", importedJson)
-    composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
-
-    // UC-30d: Sub-tela 8 — Sobre o Modos de Som & Privacidade
-    composeTestRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_ABOUT).performScrollTo().performClick()
-    composeTestRule.onNodeWithText(AppLabels.Settings.privacyCommitmentTitle).assertIsDisplayed()
     composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
 
     // Fechar Hub de Ajustes Full-Screen
@@ -803,5 +828,109 @@ class MainScreenTest {
       .performScrollTo()
       .performClick()
     assertTrue(syncedZenRules)
+  }
+
+  /**
+   * UC-33 a UC-36 (SPEC-004): Matriz Acústica Ortogonal 2×2, Split Capsule 2+1,
+   * Badge Satélite do Orbe, WRITE_SETTINGS Just-in-Time e Editor de Perfil 2×2.
+   */
+  @Test
+  fun uc33_to_uc36_orthogonal2x2Matrix_splitCapsuleOrbBadgeWriteSettingsAndProfileEditor() {
+    var soundState by mutableStateOf(SoundState(BaseAudioMode.SOUND, true))
+    var canWriteSettings by mutableStateOf(false)
+    var showWritePrompt by mutableStateOf(false)
+    var writePermissionRequestedCount = 0
+    var profiles by mutableStateOf(SoundProfile.defaultPresets)
+    var savedCustomProfile: SoundProfile? = null
+
+    composeTestRule.setContent {
+      ManageSoundModeTheme {
+        MainDashboardContent(
+          state = MainScreenUiState.Ready(
+            currentMode = soundState.toLegacyApproximation(),
+            currentSoundState = soundState,
+            canWriteSystemSettings = canWriteSettings,
+            showWriteSettingsPrompt = showWritePrompt,
+            streams = VolumeStreams(ringPercent = 80, notificationPercent = 75, mediaPercent = 55, alarmPercent = 90),
+            hasDndPermission = true,
+            profiles = profiles,
+          ),
+          onSelectMode = {},
+          onSelectAudioMode = { targetAudio ->
+            soundState = soundState.copy(audioMode = targetAudio)
+          },
+          onToggleVibrate = {
+            val nextVib = !soundState.vibrateEnabled
+            soundState = soundState.copy(vibrateEnabled = nextVib)
+            if (soundState.audioMode == BaseAudioMode.SOUND && !canWriteSettings) {
+              showWritePrompt = true
+            }
+          },
+          onRequestWriteSettingsPermission = { writePermissionRequestedCount++ },
+          onDismissWriteSettingsPrompt = { showWritePrompt = false },
+          onUpsertProfile = { profile, _ ->
+            savedCustomProfile = profile
+            profiles = profiles + profile
+          },
+          onStreamVolumeChange = { _, _ -> },
+          onActivateProfile = {},
+          onStartTimer = { _, _ -> },
+          onCancelTimer = {},
+          onSaveProfile = { _, _ -> },
+          onDismissMessage = {},
+          onRequestDndPermission = {},
+        )
+      }
+    }
+
+    // 1. Estado 1: SOUND + Vibrar ON -> Split Capsule 2+1 + Badge Satélite visíveis, sem gaveta de timer
+    composeTestRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SOUND_BUTTON).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.ORB_VIBRATE_BADGE).assertIsDisplayed()
+    composeTestRule.onNodeWithText("Som + Vibrar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).assertDoesNotExist()
+
+    // 2. Estado 2: Alternar Vibrar em Som (sem WRITE_SETTINGS) -> Som (Sem Vibrar), sem timer e exibe Banner Just-in-Time
+    composeTestRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).performClick()
+    assertEquals(SoundState(BaseAudioMode.SOUND, false), soundState)
+    composeTestRule.onNodeWithText("Som (Sem Vibrar)").assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.ORB_VIBRATE_BADGE).assertDoesNotExist()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).assertDoesNotExist()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_BANNER).assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_ENABLE_BUTTON).performClick()
+    assertEquals(1, writePermissionRequestedCount)
+    composeTestRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_DISMISS_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_BANNER).assertDoesNotExist()
+
+    // 3. Estado 4: Trocar para Silêncio preservando vibrateEnabled = false -> Silêncio Total + Timer Contextual visível
+    composeTestRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
+    assertEquals(SoundState(BaseAudioMode.SILENT, false), soundState)
+    composeTestRule.onNodeWithText("Silêncio Total").assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).assertIsDisplayed()
+
+    // 4. Estado 3: Ligar Vibrar dentro de Silêncio -> Silêncio + Vibrar + Badge Satélite visível
+    composeTestRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).performClick()
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), soundState)
+    composeTestRule.onNodeWithText("Silêncio + Vibrar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Now.ORB_VIBRATE_BADGE).assertIsDisplayed()
+
+    // 5. Editor de Perfil: criar perfil customizado "Som Sem Vib" (SOUND + vibrateEnabled = false)
+    composeTestRule.onNodeWithTag(AppTestTags.Tabs.PROFILES).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Fab.SAVE_PROFILE_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.NAME_INPUT).performTextInput("Som Sem Vib")
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.EDITOR_AUDIO_SOUND_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.EDITOR_VIBRATE_TOGGLE).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Profiles.CONFIRM_SAVE_BUTTON).performClick()
+
+    assertNotNull(savedCustomProfile)
+    assertEquals(SoundState(BaseAudioMode.SOUND, false), savedCustomProfile?.resolvedSoundState)
+
+    // 6. Diagnóstico de Permissões nas Configurações: card de WRITE_SETTINGS solicita autorização
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_PERMISSIONS).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.WRITE_SETTINGS_PERMISSION_CARD).performClick()
+    assertEquals(2, writePermissionRequestedCount)
   }
 }

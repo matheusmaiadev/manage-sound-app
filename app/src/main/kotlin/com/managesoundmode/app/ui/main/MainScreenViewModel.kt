@@ -11,12 +11,14 @@ import com.managesoundmode.app.data.repository.SoundModeRepository
 import com.managesoundmode.app.domain.model.AccessControlConfig
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.DeviceSoundSnapshot
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
@@ -42,6 +44,9 @@ sealed interface MainScreenUiState {
     val streams: VolumeStreams,
     val hasDndPermission: Boolean,
     val profiles: List<SoundProfile>,
+    val currentSoundState: SoundState = SoundState.fromLegacyMode(currentMode),
+    val canWriteSystemSettings: Boolean = true,
+    val showWriteSettingsPrompt: Boolean = false,
     val activeProfileId: String? = null,
     val activeTimer: TimedModeSession? = null,
     val statusMessage: String? = null,
@@ -76,7 +81,13 @@ sealed interface MainScreenUiState {
     val hasCompletedOnboarding: Boolean = true,
     val accessControlConfig: AccessControlConfig = AccessControlConfig(),
     val systemZenRulesEnabled: Boolean = true,
-  ) : MainScreenUiState
+  ) : MainScreenUiState {
+    val audioMode: BaseAudioMode
+      get() = currentSoundState.audioMode
+
+    val vibrateEnabled: Boolean
+      get() = currentSoundState.vibrateEnabled
+  }
 
   data class Error(val message: String) : MainScreenUiState
 }
@@ -86,23 +97,31 @@ class MainScreenViewModel(
 ) : ViewModel() {
 
   private val feedbackMessage = MutableStateFlow<String?>(null)
+  private val writeSettingsPromptRequested = MutableStateFlow(false)
 
   val uiState: StateFlow<MainScreenUiState> = combine(
     repository.snapshotStream,
     repository.profilesStream,
     repository.preferencesStream,
     feedbackMessage,
-  ) { snapshot: DeviceSoundSnapshot, profiles: List<SoundProfile>, prefs: PersistedSoundPrefs, message: String? ->
+    writeSettingsPromptRequested,
+  ) { snapshot: DeviceSoundSnapshot, profiles: List<SoundProfile>, prefs: PersistedSoundPrefs, message: String?, showWritePrompt: Boolean ->
     val resolvedLanguage = runCatching { AppLanguage.valueOf(prefs.appLanguageCode) }
       .getOrDefault(AppLanguage.PT_BR)
     if (AppLabels.currentLanguage != resolvedLanguage) {
       AppLabels.currentLanguage = resolvedLanguage
     }
+    if (snapshot.canWriteSystemSettings && showWritePrompt) {
+      writeSettingsPromptRequested.value = false
+    }
 
     MainScreenUiState.Ready(
       currentMode = snapshot.currentMode,
+      currentSoundState = snapshot.currentSoundState,
       streams = snapshot.streams,
       hasDndPermission = snapshot.hasDndPermission,
+      canWriteSystemSettings = snapshot.canWriteSystemSettings,
+      showWriteSettingsPrompt = showWritePrompt && !snapshot.canWriteSystemSettings,
       profiles = profiles,
       activeProfileId = snapshot.activeProfileId,
       activeTimer = snapshot.activeTimer,
@@ -182,6 +201,61 @@ class MainScreenViewModel(
     }
   }
 
+  fun onSelectAudioMode(audioMode: BaseAudioMode) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      repository.setBaseAudioMode(audioMode)
+        .onSuccess { applied ->
+          feedbackMessage.value = AppLabels.Now.modeChangedFeedback(applied)
+        }
+        .onFailure { error ->
+          feedbackMessage.value = error.message ?: "Não foi possível alterar o modo de som"
+        }
+    }
+  }
+
+  fun onSetVibrateEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      val readyBefore = uiState.value as? MainScreenUiState.Ready
+      repository.setVibrateEnabled(enabled)
+        .onSuccess { applied ->
+          if (applied.audioMode == BaseAudioMode.SOUND && readyBefore?.canWriteSystemSettings == false) {
+            writeSettingsPromptRequested.value = true
+            feedbackMessage.value = AppLabels.Now.writeSettingsPromptMessage
+          } else {
+            feedbackMessage.value = AppLabels.Now.vibrateToggledFeedback(applied.vibrateEnabled, applied)
+          }
+        }
+        .onFailure { error ->
+          feedbackMessage.value = error.message ?: "Não foi possível alterar a vibração"
+        }
+    }
+  }
+
+  fun onToggleVibrate() {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      val readyBefore = uiState.value as? MainScreenUiState.Ready
+      repository.toggleVibrate()
+        .onSuccess { applied ->
+          if (applied.audioMode == BaseAudioMode.SOUND && readyBefore?.canWriteSystemSettings == false) {
+            writeSettingsPromptRequested.value = true
+            feedbackMessage.value = AppLabels.Now.writeSettingsPromptMessage
+          } else {
+            feedbackMessage.value = AppLabels.Now.vibrateToggledFeedback(applied.vibrateEnabled, applied)
+          }
+        }
+        .onFailure { error ->
+          feedbackMessage.value = error.message ?: "Não foi possível alternar a vibração"
+        }
+    }
+  }
+
+  fun onDismissWriteSettingsPrompt() {
+    writeSettingsPromptRequested.value = false
+  }
+
   fun onStreamVolumeChange(type: VolumeStreamType, percent: Int) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
@@ -211,6 +285,19 @@ class MainScreenViewModel(
       repository.startTimedSession(targetMode = targetMode, durationMinutes = durationMinutes)
         .onSuccess {
           feedbackMessage.value = "Modo ${targetMode.title} ativado por $durationMinutes min"
+        }
+        .onFailure { error ->
+          feedbackMessage.value = error.message ?: "Falha ao iniciar temporizador"
+        }
+    }
+  }
+
+  fun onStartStateTimer(targetState: SoundState, durationMinutes: Int) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) return@launch
+      repository.startTimedStateSession(targetState = targetState, durationMinutes = durationMinutes)
+        .onSuccess {
+          feedbackMessage.value = AppLabels.Now.timerStartedFeedback(targetState, durationMinutes)
         }
         .onFailure { error ->
           feedbackMessage.value = error.message ?: "Falha ao iniciar temporizador"

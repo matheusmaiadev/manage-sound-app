@@ -116,7 +116,7 @@ object RuleEvaluator {
     if (activeCandidates.isNotEmpty()) {
       val sorted = activeCandidates.sortedWith(
         compareByDescending<ActiveRuleCandidate> { it.highPriority }
-          .thenByDescending { it.profile.mode.restrictivenessRank }
+          .thenByDescending { it.profile.resolvedSoundState.restrictivenessRank }
           .thenBy { if (it.source == TransitionTriggerSource.SCHEDULE) 0 else 1 },
       )
       val winner = sorted.first()

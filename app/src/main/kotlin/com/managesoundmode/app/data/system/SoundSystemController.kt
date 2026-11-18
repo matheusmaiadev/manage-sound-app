@@ -8,13 +8,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,15 +38,20 @@ interface SoundSystemController {
   val lastBroadcastWasExternal: Boolean
   fun clearExternalBroadcastFlag()
   fun readCurrentMode(): SoundMode
+  fun readSoundState(): SoundState = SoundState.fromLegacyMode(readCurrentMode())
   fun readVolumeStreams(): VolumeStreams
   fun hasDndPermission(): Boolean
+  fun canWriteSystemSettings(): Boolean = true
   fun canScheduleExactAlarms(): Boolean = true
   fun hasLocationPermission(): Boolean = false
   fun hasBackgroundLocationPermission(): Boolean = false
   fun hasNotificationPermission(): Boolean = true
   fun isMusicActive(): Boolean = false
   fun isBluetoothHeadsetConnected(): Boolean = false
+  fun syncFallbackSoundVibrate(enabled: Boolean) {}
   fun applySoundMode(mode: SoundMode): Result<SoundMode>
+  fun applySoundState(state: SoundState): Result<SoundState> =
+    applySoundMode(state.toLegacyApproximation()).map { state }
   fun applyStreamVolume(type: VolumeStreamType, percent: Int): Result<VolumeStreams>
   fun applyAllStreams(streams: VolumeStreams): Result<VolumeStreams>
 }
@@ -60,6 +71,8 @@ class AndroidSoundSystemController(
 
   private val lastAppChangeElapsedRealtime = AtomicLong(0L)
   private val externalChangeDetected = AtomicBoolean(false)
+  private val fallbackSoundVibrate = AtomicBoolean(readVibrateWhenRingingSetting() ?: true)
+  private val lastSystemVibrateWriteSucceeded = AtomicBoolean(false)
 
   override val lastBroadcastWasExternal: Boolean
     get() = externalChangeDetected.get()
@@ -74,11 +87,18 @@ class AndroidSoundSystemController(
       override fun onReceive(context: Context?, intent: Intent?) {
         val elapsedSinceAppWrite = SystemClock.elapsedRealtime() - lastAppChangeElapsedRealtime.get()
         if (lastAppChangeElapsedRealtime.get() > 0L && elapsedSinceAppWrite <= INTERNAL_CHANGE_WINDOW_MS) {
-          // Mudança disparada pelo próprio Manage Sound Mode
           externalChangeDetected.set(false)
         } else if (intent?.action != null) {
-          // Mudança disparada externamente (ex.: botões físicos de volume do usuário)
           externalChangeDetected.set(true)
+        }
+        trySend(Unit)
+      }
+    }
+    val vibrateObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+      override fun onChange(selfChange: Boolean) {
+        val elapsedSinceAppWrite = SystemClock.elapsedRealtime() - lastAppChangeElapsedRealtime.get()
+        if (lastAppChangeElapsedRealtime.get() <= 0L || elapsedSinceAppWrite > INTERNAL_CHANGE_WINDOW_MS) {
+          readVibrateWhenRingingSetting()?.let { fallbackSoundVibrate.set(it) }
         }
         trySend(Unit)
       }
@@ -97,9 +117,19 @@ class AndroidSoundSystemController(
       filter,
       ContextCompat.RECEIVER_NOT_EXPORTED,
     )
+    runCatching {
+      appContext.contentResolver.registerContentObserver(
+        Settings.System.getUriFor(VIBRATE_WHEN_RINGING_KEY),
+        false,
+        vibrateObserver,
+      )
+    }.onFailure { Log.w(TAG, "Falha ao registrar ContentObserver de vibrate_when_ringing", it) }
+
     awaitClose {
       runCatching { appContext.unregisterReceiver(receiver) }
         .onFailure { Log.w(TAG, "Falha ao desregistrar receiver de áudio", it) }
+      runCatching { appContext.contentResolver.unregisterContentObserver(vibrateObserver) }
+        .onFailure { Log.w(TAG, "Falha ao desregistrar ContentObserver de vibração", it) }
     }
   }
 
@@ -109,6 +139,24 @@ class AndroidSoundSystemController(
       AudioManager.RINGER_MODE_SILENT -> SoundMode.SILENT
       AudioManager.RINGER_MODE_VIBRATE -> SoundMode.VIBRATE
       else -> SoundMode.NORMAL
+    }
+  }
+
+  override fun readSoundState(): SoundState {
+    val ringerMode = audioManager?.ringerMode ?: AudioManager.RINGER_MODE_NORMAL
+    return when (ringerMode) {
+      AudioManager.RINGER_MODE_SILENT ->
+        SoundState(audioMode = BaseAudioMode.SILENT, vibrateEnabled = false)
+      AudioManager.RINGER_MODE_VIBRATE ->
+        SoundState(audioMode = BaseAudioMode.SILENT, vibrateEnabled = true)
+      else -> {
+        val vibrateInSound = if (canWriteSystemSettings() && lastSystemVibrateWriteSucceeded.get()) {
+          readVibrateWhenRingingSetting() ?: fallbackSoundVibrate.get()
+        } else {
+          fallbackSoundVibrate.get()
+        }
+        SoundState(audioMode = BaseAudioMode.SOUND, vibrateEnabled = vibrateInSound)
+      }
     }
   }
 
@@ -124,6 +172,12 @@ class AndroidSoundSystemController(
 
   override fun hasDndPermission(): Boolean {
     return notificationManager?.isNotificationPolicyAccessGranted ?: false
+  }
+
+  override fun canWriteSystemSettings(): Boolean {
+    return runCatching { Settings.System.canWrite(appContext) }
+      .onFailure { Log.w(TAG, "Falha ao consultar Settings.System.canWrite", it) }
+      .getOrDefault(false)
   }
 
   override fun canScheduleExactAlarms(): Boolean {
@@ -183,21 +237,50 @@ class AndroidSoundSystemController(
     }
   }
 
-  override fun applySoundMode(mode: SoundMode): Result<SoundMode> = runCatching {
+  override fun syncFallbackSoundVibrate(enabled: Boolean) {
+    fallbackSoundVibrate.set(enabled)
+    if (canWriteSystemSettings() && readCurrentMode() == SoundMode.NORMAL) {
+      writeVibrateWhenRingingSafely(enabled)
+    }
+  }
+
+  override fun applySoundMode(mode: SoundMode): Result<SoundMode> =
+    applySoundState(SoundState.fromLegacyMode(mode)).map { it.toLegacyApproximation() }
+
+  override fun applySoundState(state: SoundState): Result<SoundState> = runCatching {
     val manager = requireNotNull(audioManager) { "AudioManager indisponível no dispositivo" }
-    if ((mode == SoundMode.SILENT || readCurrentMode() == SoundMode.SILENT) && !hasDndPermission()) {
+    val targetNeedsSilentDnd = state.audioMode == BaseAudioMode.SILENT && !state.vibrateEnabled
+    val currentlySilentDnd = manager.ringerMode == AudioManager.RINGER_MODE_SILENT
+    if ((targetNeedsSilentDnd || currentlySilentDnd) && !hasDndPermission()) {
       throw DndPermissionRequiredException()
     }
+
     markInternalWrite()
-    val targetRinger = when (mode) {
-      SoundMode.NORMAL -> AudioManager.RINGER_MODE_NORMAL
-      SoundMode.VIBRATE -> AudioManager.RINGER_MODE_VIBRATE
-      SoundMode.SILENT -> AudioManager.RINGER_MODE_SILENT
+    when (state.audioMode) {
+      BaseAudioMode.SOUND -> {
+        fallbackSoundVibrate.set(state.vibrateEnabled)
+        if (manager.ringerMode != AudioManager.RINGER_MODE_NORMAL) {
+          manager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        }
+        if (canWriteSystemSettings()) {
+          writeVibrateWhenRingingSafely(state.vibrateEnabled)
+        } else {
+          lastSystemVibrateWriteSucceeded.set(false)
+        }
+      }
+
+      BaseAudioMode.SILENT -> {
+        val targetRinger = if (state.vibrateEnabled) {
+          AudioManager.RINGER_MODE_VIBRATE
+        } else {
+          AudioManager.RINGER_MODE_SILENT
+        }
+        manager.ringerMode = targetRinger
+      }
     }
-    manager.ringerMode = targetRinger
-    readCurrentMode()
+    readSoundState()
   }.onFailure { error ->
-    Log.e(TAG, "Erro ao aplicar modo de som: $mode", error)
+    Log.e(TAG, "Erro ao aplicar estado de som 2x2: $state", error)
   }
 
   override fun applyStreamVolume(type: VolumeStreamType, percent: Int): Result<VolumeStreams> = runCatching {
@@ -220,6 +303,28 @@ class AndroidSoundSystemController(
     readVolumeStreams()
   }.onFailure { error ->
     Log.e(TAG, "Erro ao aplicar múltiplos canais de volume", error)
+  }
+
+  private fun readVibrateWhenRingingSetting(): Boolean? =
+    runCatching {
+      Settings.System.getInt(appContext.contentResolver, VIBRATE_WHEN_RINGING_KEY) != 0
+    }.onFailure { error ->
+      Log.d(TAG, "vibrate_when_ringing não encontrado em Settings.System; usando fallback", error)
+    }.getOrNull()
+
+  private fun writeVibrateWhenRingingSafely(enabled: Boolean) {
+    runCatching {
+      val wrote = Settings.System.putInt(
+        appContext.contentResolver,
+        VIBRATE_WHEN_RINGING_KEY,
+        if (enabled) 1 else 0,
+      )
+      val verified = wrote && (readVibrateWhenRingingSetting() == enabled)
+      lastSystemVibrateWriteSucceeded.set(verified)
+    }.onFailure { error ->
+      lastSystemVibrateWriteSucceeded.set(false)
+      Log.w(TAG, "Falha ao atualizar vibrate_when_ringing no Settings.System; mantendo fallback local", error)
+    }
   }
 
   private fun markInternalWrite() {
@@ -258,5 +363,6 @@ class AndroidSoundSystemController(
     const val TAG = "AndroidSoundController"
     const val INTERNAL_CHANGE_WINDOW_MS = 400L
     const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
+    const val VIBRATE_WHEN_RINGING_KEY = "vibrate_when_ringing"
   }
 }

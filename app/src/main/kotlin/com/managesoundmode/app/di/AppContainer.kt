@@ -71,10 +71,12 @@ class DefaultAppContainer(
           val activeProfileName = prefs.activeProfileId?.let { activeId ->
             allProfiles.lastOrNull { it.id == activeId }?.name
           }
+          val currentSoundState = soundSystemController.readSoundState()
           SmartNotificationManager.syncPersistentQuickBarNotification(
             context = appContext,
             enabled = prefs.persistentQuickBarEnabled,
-            currentMode = soundSystemController.readCurrentMode(),
+            currentMode = currentSoundState.toLegacyApproximation(),
+            currentSoundState = currentSoundState,
             streams = soundSystemController.readVolumeStreams(),
             activeProfileName = activeProfileName,
             activeTimer = prefs.activeTimer,

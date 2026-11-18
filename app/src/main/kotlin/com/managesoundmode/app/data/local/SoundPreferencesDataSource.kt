@@ -56,9 +56,11 @@ data class SoundPrefsBackupPayload(
   val quickTileSlot2ProfileId: String = "preset_sleep",
   val accessControlConfig: AccessControlConfig = AccessControlConfig(),
   val systemZenRulesEnabled: Boolean = true,
+  val soundVibrateEnabledFallback: Boolean = true,
 )
 
 data class PersistedSoundPrefs(
+  val schemaVersion: Int = 2,
   val activeProfileId: String? = null,
   val activeTimer: TimedModeSession? = null,
   val customProfiles: List<SoundProfile> = emptyList(),
@@ -89,6 +91,7 @@ data class PersistedSoundPrefs(
   val hasCompletedOnboarding: Boolean = false,
   val accessControlConfig: AccessControlConfig = AccessControlConfig(),
   val systemZenRulesEnabled: Boolean = true,
+  val soundVibrateEnabledFallback: Boolean = true,
 )
 
 interface SoundPreferencesDataSource {
@@ -126,6 +129,7 @@ interface SoundPreferencesDataSource {
   suspend fun setOnboardingCompleted(completed: Boolean) {}
   suspend fun setAccessControlConfig(config: AccessControlConfig) {}
   suspend fun setSystemZenRulesEnabled(enabled: Boolean) {}
+  suspend fun setSoundVibrateEnabledFallback(enabled: Boolean) {}
   suspend fun resetFactoryDefaults() {}
   suspend fun exportBackupJson(): String = "{}"
   suspend fun importBackupJson(rawJson: String) {}
@@ -154,7 +158,7 @@ class DataStoreSoundPreferencesDataSource(
             .getOrNull()
         }
         val customProfiles = prefs[KEY_CUSTOM_PROFILES_JSON]?.let { raw ->
-          runCatching { json.decodeFromString<List<SoundProfile>>(raw) }
+          runCatching { json.decodeFromString<List<SoundProfile>>(raw).map { it.normalized() } }
             .onFailure { Log.w(TAG, "Falha ao desserializar perfis customizados", it) }
             .getOrDefault(emptyList())
         } ?: emptyList()
@@ -202,6 +206,7 @@ class DataStoreSoundPreferencesDataSource(
         } ?: AccessControlConfig()
 
         PersistedSoundPrefs(
+          schemaVersion = prefs[KEY_SCHEMA_VERSION] ?: CURRENT_SCHEMA_VERSION,
           activeProfileId = activeProfileId,
           activeTimer = activeTimer,
           customProfiles = customProfiles,
@@ -232,6 +237,7 @@ class DataStoreSoundPreferencesDataSource(
           hasCompletedOnboarding = prefs[KEY_HAS_COMPLETED_ONBOARDING] ?: false,
           accessControlConfig = accessControlConfig,
           systemZenRulesEnabled = prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] ?: true,
+          soundVibrateEnabledFallback = prefs[KEY_SOUND_VIBRATE_ENABLED] ?: true,
         )
       }
 
@@ -256,18 +262,21 @@ class DataStoreSoundPreferencesDataSource(
   }
 
   override suspend fun upsertCustomProfile(profile: SoundProfile) {
+    val normalizedProfile = profile.normalized()
     context.soundDataStore.edit { prefs ->
       val currentList = prefs[KEY_CUSTOM_PROFILES_JSON]?.let { raw ->
-        runCatching { json.decodeFromString<List<SoundProfile>>(raw) }.getOrDefault(emptyList())
+        runCatching { json.decodeFromString<List<SoundProfile>>(raw).map { it.normalized() } }
+          .getOrDefault(emptyList())
       } ?: emptyList()
-      val updated = currentList.filterNot { it.id == profile.id } + profile
+      val updated = currentList.filterNot { it.id == normalizedProfile.id } + normalizedProfile
       prefs[KEY_CUSTOM_PROFILES_JSON] = json.encodeToString(updated)
+      prefs[KEY_SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
 
       val deletedIds = prefs[KEY_DELETED_PROFILE_IDS_JSON]?.let { raw ->
         runCatching { json.decodeFromString<Set<String>>(raw) }.getOrDefault(emptySet())
       } ?: emptySet()
-      if (profile.id in deletedIds) {
-        prefs[KEY_DELETED_PROFILE_IDS_JSON] = json.encodeToString(deletedIds - profile.id)
+      if (normalizedProfile.id in deletedIds) {
+        prefs[KEY_DELETED_PROFILE_IDS_JSON] = json.encodeToString(deletedIds - normalizedProfile.id)
       }
     }
   }
@@ -511,8 +520,15 @@ class DataStoreSoundPreferencesDataSource(
     }
   }
 
+  override suspend fun setSoundVibrateEnabledFallback(enabled: Boolean) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_SOUND_VIBRATE_ENABLED] = enabled
+    }
+  }
+
   override suspend fun resetFactoryDefaults() {
     context.soundDataStore.edit { prefs ->
+      prefs[KEY_SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
       prefs.remove(KEY_CUSTOM_PROFILES_JSON)
       prefs.remove(KEY_DELETED_PROFILE_IDS_JSON)
       prefs.remove(KEY_SCHEDULE_RULES_JSON)
@@ -534,14 +550,15 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_QUICK_TILE_SLOT2_PROFILE_ID] = "preset_sleep"
       prefs.remove(KEY_ACCESS_CONTROL_JSON)
       prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] = true
+      prefs[KEY_SOUND_VIBRATE_ENABLED] = true
     }
   }
 
   override suspend fun exportBackupJson(): String {
     val current = prefsFlow.first()
     val payload = SoundPrefsBackupPayload(
-      version = 1,
-      customProfiles = current.customProfiles,
+      version = CURRENT_SCHEMA_VERSION,
+      customProfiles = current.customProfiles.map { it.normalized() },
       deletedProfileIds = current.deletedProfileIds,
       scheduleRules = current.scheduleRules,
       locationRules = current.locationRules,
@@ -563,6 +580,7 @@ class DataStoreSoundPreferencesDataSource(
       // Omite pinCode no arquivo exportado para evitar exposição de PIN em backups compartilhados
       accessControlConfig = current.accessControlConfig.copy(pinCode = null),
       systemZenRulesEnabled = current.systemZenRulesEnabled,
+      soundVibrateEnabledFallback = current.soundVibrateEnabledFallback,
     )
     return json.encodeToString(payload)
   }
@@ -577,7 +595,8 @@ class DataStoreSoundPreferencesDataSource(
         radiusMeters = rule.radiusMeters.coerceIn(50, 5000),
       )
     }
-    val sanitizedProfiles = payload.customProfiles.take(MAX_IMPORTED_ITEMS)
+    // Migra transparentemente perfis v1 (somente `mode`) para v2 (`audioMode` + `vibrateEnabled`)
+    val sanitizedProfiles = payload.customProfiles.take(MAX_IMPORTED_ITEMS).map { it.normalized() }
     val sanitizedSchedules = payload.scheduleRules.take(MAX_IMPORTED_ITEMS)
 
     context.soundDataStore.edit { prefs ->
@@ -590,6 +609,7 @@ class DataStoreSoundPreferencesDataSource(
         payload.accessControlConfig
       }
 
+      prefs[KEY_SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
       prefs[KEY_CUSTOM_PROFILES_JSON] = json.encodeToString(sanitizedProfiles)
       prefs[KEY_DELETED_PROFILE_IDS_JSON] = json.encodeToString(payload.deletedProfileIds.take(MAX_IMPORTED_ITEMS).toSet())
       prefs[KEY_SCHEDULE_RULES_JSON] = json.encodeToString(sanitizedSchedules)
@@ -611,14 +631,17 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_QUICK_TILE_SLOT2_PROFILE_ID] = payload.quickTileSlot2ProfileId
       prefs[KEY_ACCESS_CONTROL_JSON] = json.encodeToString(resolvedAccess)
       prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] = payload.systemZenRulesEnabled
+      prefs[KEY_SOUND_VIBRATE_ENABLED] = payload.soundVibrateEnabledFallback
     }
   }
 
   private companion object {
     const val TAG = "SoundPrefsDataSource"
+    const val CURRENT_SCHEMA_VERSION = 2
     const val MAX_LOG_ENTRIES = 30
     const val MAX_IMPORTED_ITEMS = 100
     const val MAX_BACKUP_JSON_CHARS = 512_000
+    val KEY_SCHEMA_VERSION = intPreferencesKey("prefs_schema_version")
     val KEY_ACTIVE_PROFILE_ID = stringPreferencesKey("active_profile_id")
     val KEY_ACTIVE_TIMER_JSON = stringPreferencesKey("active_timer_json")
     val KEY_CUSTOM_PROFILES_JSON = stringPreferencesKey("custom_profiles_json")
@@ -649,5 +672,6 @@ class DataStoreSoundPreferencesDataSource(
     val KEY_HAS_COMPLETED_ONBOARDING = booleanPreferencesKey("has_completed_onboarding")
     val KEY_ACCESS_CONTROL_JSON = stringPreferencesKey("access_control_json")
     val KEY_SYSTEM_ZEN_RULES_ENABLED = booleanPreferencesKey("system_zen_rules_enabled")
+    val KEY_SOUND_VIBRATE_ENABLED = booleanPreferencesKey("sound_vibrate_enabled")
   }
 }

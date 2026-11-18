@@ -8,18 +8,23 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.managesoundmode.app.MainActivity
 import com.managesoundmode.app.R
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.receiver.SystemAutomationReceiver
+import com.managesoundmode.app.ui.common.AppLabels
 
 object SmartNotificationManager {
 
+  private const val TAG = "SmartNotificationMgr"
   private const val CHANNEL_SMART_PROMPT = "smart_volume_prompt"
   private const val CHANNEL_ACTIVE_TIMER = "active_timer_status"
   private const val CHANNEL_RULE_OVERRIDE = "rule_override_alert"
@@ -35,40 +40,40 @@ object SmartNotificationManager {
 
     val promptChannel = NotificationChannel(
       CHANNEL_SMART_PROMPT,
-      "Sugestão de Timer ao Silenciar",
+      AppLabels.Notifications.promptChannelName,
       NotificationManager.IMPORTANCE_HIGH,
     ).apply {
-      description = "Pergunta se você deseja restaurar o som automaticamente ao silenciar pelo botão de volume"
+      description = AppLabels.Notifications.promptChannelDescription
       setSound(null, null)
       enableVibration(false)
     }
 
     val timerChannel = NotificationChannel(
       CHANNEL_ACTIVE_TIMER,
-      "Timer de Restauração Ativo",
+      AppLabels.Notifications.timerChannelName,
       NotificationManager.IMPORTANCE_LOW,
     ).apply {
-      description = "Mostra a contagem regressiva nativa enquanto um modo temporizado está ativo"
+      description = AppLabels.Notifications.timerChannelDescription
       setSound(null, null)
       enableVibration(false)
     }
 
     val overrideChannel = NotificationChannel(
       CHANNEL_RULE_OVERRIDE,
-      "Aviso de Pausa em Rotinas",
+      AppLabels.Notifications.overrideChannelName,
       NotificationManager.IMPORTANCE_LOW,
     ).apply {
-      description = "Permite reativar em 1 toque uma rotina alterada pelos botões físicos"
+      description = AppLabels.Notifications.overrideChannelDescription
       setSound(null, null)
       enableVibration(false)
     }
 
     val quickBarChannel = NotificationChannel(
       CHANNEL_PERSISTENT_QUICK_BAR,
-      "Gadget de Controle Rápido no Header",
+      AppLabels.Notifications.quickBarChannelName,
       NotificationManager.IMPORTANCE_LOW,
     ).apply {
-      description = "Barra rápida persistente na gaveta de notificações para alternar Som, Vibrar e Silêncio em 1 toque"
+      description = AppLabels.Notifications.quickBarChannelDescription
       setSound(null, null)
       enableVibration(false)
       setShowBadge(false)
@@ -86,6 +91,7 @@ object SmartNotificationManager {
     streams: VolumeStreams,
     activeProfileName: String?,
     activeTimer: TimedModeSession?,
+    currentSoundState: SoundState = SoundState.fromLegacyMode(currentMode),
   ) {
     val manager = NotificationManagerCompat.from(context)
     if (!enabled || !canPostNotifications(context)) {
@@ -97,25 +103,24 @@ object SmartNotificationManager {
     val now = System.currentTimeMillis()
     val remainingMin = activeTimer?.remainingMinutes(now)?.takeIf { it > 0 }
 
-    val title = when {
-      remainingMin != null -> "${currentMode.title} • Timer (${remainingMin}m restantes)"
-      !activeProfileName.isNullOrBlank() -> "${currentMode.title} • Perfil $activeProfileName"
-      else -> "Modo Atual: ${currentMode.title}"
-    }
+    val title = AppLabels.Notifications.quickBarTitle(
+      state = currentSoundState,
+      remainingMin = remainingMin,
+      activeProfileName = activeProfileName,
+    )
+    val subtitle = AppLabels.Notifications.quickBarSubtitle(
+      state = currentSoundState,
+      streams = streams,
+    )
 
-    val subtitle = when (currentMode) {
-      SoundMode.NORMAL ->
-        "Toque ${streams.ringPercent}% • Notif ${streams.notificationPercent}% • Mídia ${streams.mediaPercent}%"
-      SoundMode.VIBRATE ->
-        "Vibração ativa • Mídia ${streams.mediaPercent}% • Alarme ${streams.alarmPercent}%"
-      SoundMode.SILENT ->
-        "Silêncio total • Mídia ${streams.mediaPercent}% • Alarme ${streams.alarmPercent}%"
-    }
-
-    val smallIconRes = when (currentMode) {
-      SoundMode.NORMAL -> R.drawable.ic_widget_volume_up
-      SoundMode.VIBRATE -> R.drawable.ic_widget_vibration
-      SoundMode.SILENT -> R.drawable.ic_widget_silent
+    val smallIconRes = when (currentSoundState.audioMode) {
+      BaseAudioMode.SOUND -> R.drawable.ic_widget_volume_up
+      BaseAudioMode.SILENT ->
+        if (currentSoundState.vibrateEnabled) {
+          R.drawable.ic_widget_vibration
+        } else {
+          R.drawable.ic_widget_silent
+        }
     }
 
     val notification = NotificationCompat.Builder(context, CHANNEL_PERSISTENT_QUICK_BAR)
@@ -132,18 +137,18 @@ object SmartNotificationManager {
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .addAction(
         R.drawable.ic_widget_volume_up,
-        if (currentMode == SoundMode.NORMAL) "● Som" else "Som",
-        setModePendingIntent(context, requestCode = 420, mode = SoundMode.NORMAL),
-      )
-      .addAction(
-        R.drawable.ic_widget_vibration,
-        if (currentMode == SoundMode.VIBRATE) "● Vibrar" else "Vibrar",
-        setModePendingIntent(context, requestCode = 421, mode = SoundMode.VIBRATE),
+        AppLabels.Notifications.quickBarSoundAction(currentSoundState.audioMode == BaseAudioMode.SOUND),
+        setAudioModePendingIntent(context, requestCode = 420, audioMode = BaseAudioMode.SOUND),
       )
       .addAction(
         R.drawable.ic_widget_silent,
-        if (currentMode == SoundMode.SILENT) "● Silêncio" else "Silêncio",
-        setModePendingIntent(context, requestCode = 422, mode = SoundMode.SILENT),
+        AppLabels.Notifications.quickBarSilentAction(currentSoundState.audioMode == BaseAudioMode.SILENT),
+        setAudioModePendingIntent(context, requestCode = 421, audioMode = BaseAudioMode.SILENT),
+      )
+      .addAction(
+        R.drawable.ic_widget_vibration,
+        AppLabels.Notifications.quickBarVibrateAction(currentSoundState.vibrateEnabled),
+        toggleVibratePendingIntent(context, requestCode = 422),
       )
       .build()
 
@@ -157,17 +162,12 @@ object SmartNotificationManager {
   ) {
     if (!canPostNotifications(context)) return
     ensureChannels(context)
-
-    val subtitle = if (mediaAutoMuted) {
-      "Mídia zerada automaticamente • Restaurar som depois?"
-    } else {
-      "Por quanto tempo deseja manter no modo ${mode.title}?"
-    }
+    val state = SoundState.fromLegacyMode(mode)
 
     val notification = NotificationCompat.Builder(context, CHANNEL_SMART_PROMPT)
       .setSmallIcon(R.drawable.ic_qs_sound_mode)
-      .setContentTitle("Modo ${mode.title} ativado")
-      .setContentText(subtitle)
+      .setContentTitle(AppLabels.Notifications.smartPromptTitle(state.title))
+      .setContentText(AppLabels.Notifications.smartPromptSubtitle(state.title, mediaAutoMuted))
       .setContentIntent(openAppPendingIntent(context))
       .setAutoCancel(true)
       .setSilent(true)
@@ -176,17 +176,17 @@ object SmartNotificationManager {
       .setCategory(NotificationCompat.CATEGORY_STATUS)
       .addAction(
         0,
-        "30 min",
+        AppLabels.Notifications.action30Min,
         timerActionPendingIntent(context, requestCode = 401, durationMinutes = 30),
       )
       .addAction(
         0,
-        "1 hora",
+        AppLabels.Notifications.action1Hour,
         timerActionPendingIntent(context, requestCode = 402, durationMinutes = 60),
       )
       .addAction(
         0,
-        "2 horas",
+        AppLabels.Notifications.action2Hours,
         timerActionPendingIntent(context, requestCode = 403, durationMinutes = 120),
       )
       .build()
@@ -205,7 +205,6 @@ object SmartNotificationManager {
       return
     }
 
-    // Se um timer começou, remove o prompt de pergunta inicial
     manager.cancel(NOTIFICATION_ID_SMART_PROMPT)
 
     if (!canPostNotifications(context)) return
@@ -213,8 +212,8 @@ object SmartNotificationManager {
 
     val notification = NotificationCompat.Builder(context, CHANNEL_ACTIVE_TIMER)
       .setSmallIcon(R.drawable.ic_qs_sound_mode)
-      .setContentTitle("${session.targetMode.title} temporizado ativo")
-      .setContentText("Voltará para ${session.previousMode.title} automaticamente")
+      .setContentTitle(AppLabels.Notifications.activeTimerTitle(session.resolvedSoundState.title))
+      .setContentText(AppLabels.Notifications.activeTimerSubtitle(session.resolvedPreviousSoundState.title))
       .setContentIntent(openAppPendingIntent(context))
       .setOngoing(true)
       .setOnlyAlertOnce(true)
@@ -226,12 +225,12 @@ object SmartNotificationManager {
       .setCategory(NotificationCompat.CATEGORY_PROGRESS)
       .addAction(
         0,
-        "+30 min",
+        AppLabels.Notifications.actionExtend30Min,
         extendTimerPendingIntent(context, addMinutes = 30),
       )
       .addAction(
         0,
-        "Restaurar agora",
+        AppLabels.Notifications.actionRestoreNow,
         restoreNowPendingIntent(context),
       )
       .build()
@@ -248,15 +247,15 @@ object SmartNotificationManager {
 
     val notification = NotificationCompat.Builder(context, CHANNEL_RULE_OVERRIDE)
       .setSmallIcon(R.drawable.ic_qs_sound_mode)
-      .setContentTitle("Rotina '$ruleName' pausada manualmente")
-      .setContentText("Você alterou o som pelos botões físicos.")
+      .setContentTitle(AppLabels.Notifications.ruleOverrideTitle(ruleName))
+      .setContentText(AppLabels.Notifications.ruleOverrideSubtitle)
       .setContentIntent(openAppPendingIntent(context))
       .setAutoCancel(true)
       .setSilent(true)
       .setTimeoutAfter(90_000L)
       .addAction(
         0,
-        "Reativar rotina",
+        AppLabels.Notifications.actionReapplyRule,
         reapplyRulePendingIntent(context),
       )
       .build()
@@ -273,6 +272,8 @@ object SmartNotificationManager {
     if (!canPostNotifications(context)) return
     runCatching {
       NotificationManagerCompat.from(context).notify(notificationId, notification)
+    }.onFailure { error ->
+      Log.w(TAG, "Falha ao publicar notificação ($notificationId)", error)
     }
   }
 
@@ -299,6 +300,7 @@ object SmartNotificationManager {
     val intent = Intent(context, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
+    InternalIntentSecurity.signIntent(context, intent)
     return PendingIntent.getActivity(
       context,
       400,
@@ -307,14 +309,30 @@ object SmartNotificationManager {
     )
   }
 
-  private fun setModePendingIntent(
+  private fun setAudioModePendingIntent(
     context: Context,
     requestCode: Int,
-    mode: SoundMode,
+    audioMode: BaseAudioMode,
   ): PendingIntent {
     val intent = Intent(context, SystemAutomationReceiver::class.java).apply {
-      action = SystemAutomationReceiver.ACTION_WIDGET_SET_MODE
-      putExtra(SystemAutomationReceiver.EXTRA_SOUND_MODE, mode.name)
+      action = SystemAutomationReceiver.ACTION_WIDGET_SET_AUDIO_MODE
+      putExtra(SystemAutomationReceiver.EXTRA_BASE_AUDIO_MODE, audioMode.name)
+    }
+    InternalIntentSecurity.signIntent(context, intent)
+    return PendingIntent.getBroadcast(
+      context,
+      requestCode,
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+  }
+
+  private fun toggleVibratePendingIntent(
+    context: Context,
+    requestCode: Int,
+  ): PendingIntent {
+    val intent = Intent(context, SystemAutomationReceiver::class.java).apply {
+      action = SystemAutomationReceiver.ACTION_WIDGET_TOGGLE_VIBRATE
     }
     InternalIntentSecurity.signIntent(context, intent)
     return PendingIntent.getBroadcast(

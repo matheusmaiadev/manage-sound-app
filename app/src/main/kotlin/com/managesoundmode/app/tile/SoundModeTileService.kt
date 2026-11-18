@@ -6,16 +6,21 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import android.util.Log
 import androidx.annotation.DrawableRes
 import androidx.core.content.ContextCompat
 import com.managesoundmode.app.ManageSoundApplication
 import com.managesoundmode.app.R
-import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
+import com.managesoundmode.app.ui.common.AppLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,58 +30,65 @@ import kotlinx.coroutines.launch
 
 enum class QuickTileKind(
   val serviceClass: Class<out TileService>,
-  val title: String,
-  val subtitle: String,
   @param:DrawableRes val iconRes: Int,
 ) {
   CYCLE(
     serviceClass = SoundModeTileService::class.java,
-    title = "Modo de Som (Ciclo)",
-    subtitle = "1 único bloco que alterna Som → Vibrar → Silêncio",
     iconRes = R.drawable.ic_qs_sound_mode,
   ),
   MODE_NORMAL(
     serviceClass = NormalModeTileService::class.java,
-    title = "Modo: Som",
-    subtitle = "Fica aceso em Som Normal • 1 toque ativa o som",
     iconRes = R.drawable.ic_widget_volume_up,
   ),
   MODE_VIBRATE(
     serviceClass = VibrateModeTileService::class.java,
-    title = "Modo: Vibrar",
-    subtitle = "Fica aceso em Vibrar • Toque ativa ou volta para Som",
     iconRes = R.drawable.ic_widget_vibration,
   ),
   MODE_SILENT(
     serviceClass = SilentModeTileService::class.java,
-    title = "Modo: Silêncio",
-    subtitle = "Fica aceso em Silencioso • Toque ativa ou volta para Som",
     iconRes = R.drawable.ic_widget_silent,
   ),
   PROFILE_SLOT_1(
     serviceClass = ProfileSlot1TileService::class.java,
-    title = "Perfil Rápido 1",
-    subtitle = "Ativa os 4 volumes e modo do Perfil 1 em 1 toque",
     iconRes = R.drawable.ic_widget_style,
   ),
   PROFILE_SLOT_2(
     serviceClass = ProfileSlot2TileService::class.java,
-    title = "Perfil Rápido 2",
-    subtitle = "Ativa os 4 volumes e modo do Perfil 2 em 1 toque",
     iconRes = R.drawable.ic_widget_style,
   ),
   QUICK_TIMER(
     serviceClass = QuickTimerTileService::class.java,
-    title = "Timer Silêncio (30m/1h/2h)",
-    subtitle = "Inicia timer de vibração com auto-restore ou cancela em 1 toque",
     iconRes = R.drawable.ic_qs_timer,
   ),
   MEDIA_MUTE(
     serviceClass = MediaMuteTileService::class.java,
-    title = "Zero Mídia (Mudo Rápido)",
-    subtitle = "Fica aceso quando a Mídia está em 0% • Zera ou restaura",
     iconRes = R.drawable.ic_qs_media_mute,
   ),
+  ;
+
+  val title: String
+    get() = when (this) {
+      CYCLE -> AppLabels.Tiles.cycleTitle
+      MODE_NORMAL -> AppLabels.Tiles.normalTitle
+      MODE_VIBRATE -> AppLabels.Tiles.vibrateTitle
+      MODE_SILENT -> AppLabels.Tiles.silentTitle
+      PROFILE_SLOT_1 -> AppLabels.Tiles.slot1Title
+      PROFILE_SLOT_2 -> AppLabels.Tiles.slot2Title
+      QUICK_TIMER -> AppLabels.Tiles.quickTimerTitle
+      MEDIA_MUTE -> AppLabels.Tiles.mediaMuteTitle
+    }
+
+  val subtitle: String
+    get() = when (this) {
+      CYCLE -> AppLabels.Tiles.cycleSubtitle
+      MODE_NORMAL -> AppLabels.Tiles.normalDesc
+      MODE_VIBRATE -> AppLabels.Tiles.vibrateDesc
+      MODE_SILENT -> AppLabels.Tiles.silentDesc
+      PROFILE_SLOT_1 -> AppLabels.Tiles.slot1Desc
+      PROFILE_SLOT_2 -> AppLabels.Tiles.slot2Desc
+      QUICK_TIMER -> AppLabels.Tiles.quickTimerDesc
+      MEDIA_MUTE -> AppLabels.Tiles.mediaMuteDesc
+    }
 }
 
 abstract class BaseSoundTileService : TileService() {
@@ -103,6 +115,11 @@ abstract class BaseSoundTileService : TileService() {
     val app = applicationContext as? ManageSoundApplication ?: return
     val scope = serviceScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     scope.launch {
+      val prefs = app.container.preferencesDataSource.prefsFlow.first()
+      if (!prefs.accessControlConfig.hasPermission(AppPermission.CHANGE_SOUND_AND_TIMER)) {
+        refreshTileState()
+        return@launch
+      }
       handleTileClick(app)
       refreshTileState()
       SoundModeTileService.refreshAllTiles(applicationContext)
@@ -114,11 +131,27 @@ abstract class BaseSoundTileService : TileService() {
     val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
+    startSettingsIntentSafely(intent, requestCode = 910)
+  }
+
+  @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
+  protected fun openWriteSettingsPermissionSettings() {
+    val intent = Intent(
+      Settings.ACTION_MANAGE_WRITE_SETTINGS,
+      Uri.parse("package:$packageName"),
+    ).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    startSettingsIntentSafely(intent, requestCode = 911)
+  }
+
+  @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
+  private fun startSettingsIntentSafely(intent: Intent, requestCode: Int) {
     runCatching {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
         val pendingIntent = PendingIntent.getActivity(
           this,
-          910,
+          requestCode,
           intent,
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -127,15 +160,21 @@ abstract class BaseSoundTileService : TileService() {
         @Suppress("DEPRECATION")
         startActivityAndCollapse(intent)
       }
+    }.onFailure { error ->
+      Log.w(TAG, "Falha ao abrir configurações do sistema pelo Quick Tile", error)
     }
   }
 
   protected abstract suspend fun handleTileClick(app: ManageSoundApplication)
   protected abstract suspend fun refreshTileState()
+
+  private companion object {
+    const val TAG = "BaseSoundTileService"
+  }
 }
 
 /**
- * 0. Bloco Alternador Único (Ciclo: Som -> Vibrar -> Silêncio -> Som)
+ * 0. Bloco Alternador Único (Ciclo: Som -> Silêncio + Vibrar -> Silêncio Total -> Som)
  */
 class SoundModeTileService : BaseSoundTileService() {
 
@@ -146,35 +185,40 @@ class SoundModeTileService : BaseSoundTileService() {
   override suspend fun refreshTileState() {
     val tile = qsTile ?: return
     val app = applicationContext as? ManageSoundApplication ?: return
-    val mode = app.container.soundSystemController.readCurrentMode()
+    val state = app.container.soundSystemController.readSoundState()
     val streams = app.container.soundSystemController.readVolumeStreams()
     val prefs = app.container.preferencesDataSource.prefsFlow.first()
     val profiles = app.container.soundModeRepository.profilesStream.first()
     val activeProfile = profiles.firstOrNull { it.id == prefs.activeProfileId }
     val remainingMin = prefs.activeTimer?.remainingMinutes(System.currentTimeMillis())
 
-    val iconRes = when (mode) {
-      SoundMode.NORMAL -> R.drawable.ic_widget_volume_up
-      SoundMode.VIBRATE -> R.drawable.ic_widget_vibration
-      SoundMode.SILENT -> R.drawable.ic_widget_silent
+    val iconRes = when (state.audioMode) {
+      BaseAudioMode.SOUND -> R.drawable.ic_widget_volume_up
+      BaseAudioMode.SILENT ->
+        if (state.vibrateEnabled) R.drawable.ic_widget_vibration else R.drawable.ic_widget_silent
     }
 
     tile.state = Tile.STATE_ACTIVE
     tile.icon = Icon.createWithResource(this, iconRes)
-    tile.label = activeProfile?.name ?: "Som: ${mode.title}"
+    tile.label = activeProfile?.name ?: AppLabels.Tiles.cycleLabel(state.title)
     tile.subtitle = when {
-      remainingMin != null && remainingMin > 0 -> "${mode.title} • ${remainingMin}m"
-      mode == SoundMode.NORMAL -> "Toque ${streams.ringPercent}% • Mídia ${streams.mediaPercent}%"
-      else -> "${mode.title} • Mídia ${streams.mediaPercent}%"
+      remainingMin != null && remainingMin > 0 -> "${state.title} • ${remainingMin}m"
+      state.audioMode == BaseAudioMode.SOUND ->
+        AppLabels.Tiles.soundActiveSubtitle(streams.ringPercent, state.vibrateEnabled)
+      else -> "${state.title} • ${streams.mediaPercent}%"
     }
     tile.updateTile()
   }
 
   companion object {
+    private const val TAG = "SoundModeTileService"
+
     fun refreshAllTiles(context: Context) {
       QuickTileKind.entries.forEach { kind ->
         runCatching {
           requestListeningState(context, ComponentName(context, kind.serviceClass))
+        }.onFailure { error ->
+          Log.d(TAG, "Falha ao atualizar estado do tile ${kind.name}", error)
         }
       }
     }
@@ -189,7 +233,7 @@ class SoundModeTileService : BaseSoundTileService() {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         val statusBarManager = context.getSystemService(StatusBarManager::class.java)
         if (statusBarManager == null) {
-          onResultMessage("Abra o lápis (✏️) no topo das notificações para adicionar '$displayTitle'.")
+          onResultMessage(AppLabels.Tiles.tileManualEditHint(displayTitle))
           return
         }
         val componentName = ComponentName(context, kind.serviceClass)
@@ -202,33 +246,40 @@ class SoundModeTileService : BaseSoundTileService() {
         ) { resultCode ->
           val msg = when (resultCode) {
             StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ->
-              "Bloco '$displayTitle' adicionado ao topo das notificações!"
+              AppLabels.Tiles.tileAddedMessage(displayTitle)
             StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED ->
-              "O bloco '$displayTitle' já está ativo no topo das notificações."
+              AppLabels.Tiles.tileAlreadyAddedMessage(displayTitle)
             StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED ->
-              "Adição de '$displayTitle' cancelada."
+              AppLabels.Tiles.tileCancelledMessage(displayTitle)
             else ->
-              "Puxe o topo das notificações e toque no lápis (✏️) para posicionar '$displayTitle'."
+              AppLabels.Tiles.tileManualEditHint(displayTitle)
           }
           onResultMessage(msg)
         }
       } else {
-        onResultMessage(
-          "Puxe a barra de notificações e toque no lápis (✏️) para adicionar o bloco '$displayTitle'.",
-        )
+        onResultMessage(AppLabels.Tiles.tileManualEditHint(displayTitle))
       }
     }
   }
 }
 
 /**
- * Opção A.1 — Bloco Direto: Modo Som Normal
+ * Opção A.1 — Bloco Direto: Eixo de Áudio `Som` (`BaseAudioMode.SOUND`), preservando vibração.
  */
 class NormalModeTileService : BaseSoundTileService() {
 
   override suspend fun handleTileClick(app: ManageSoundApplication) {
-    app.container.soundModeRepository.setSoundMode(
-      mode = SoundMode.NORMAL,
+    val controller = app.container.soundSystemController
+    val currentState = controller.readSoundState()
+    if (currentState.audioMode == BaseAudioMode.SILENT &&
+      !currentState.vibrateEnabled &&
+      !controller.hasDndPermission()
+    ) {
+      openDndPermissionSettings()
+      return
+    }
+    app.container.soundModeRepository.setBaseAudioMode(
+      audioMode = BaseAudioMode.SOUND,
       source = TransitionTriggerSource.QUICK_TILE,
     )
   }
@@ -236,69 +287,84 @@ class NormalModeTileService : BaseSoundTileService() {
   override suspend fun refreshTileState() {
     val tile = qsTile ?: return
     val app = applicationContext as? ManageSoundApplication ?: return
-    val mode = app.container.soundSystemController.readCurrentMode()
+    val state = app.container.soundSystemController.readSoundState()
     val streams = app.container.soundSystemController.readVolumeStreams()
-    val isActive = mode == SoundMode.NORMAL
+    val isActive = state.audioMode == BaseAudioMode.SOUND
 
     tile.state = if (isActive) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
     tile.icon = Icon.createWithResource(this, R.drawable.ic_widget_volume_up)
-    tile.label = "Som Normal"
+    tile.label = AppLabels.Tiles.soundLabel
     tile.subtitle = if (isActive) {
-      "Ativo • Toque ${streams.ringPercent}%"
+      AppLabels.Tiles.soundActiveSubtitle(streams.ringPercent, state.vibrateEnabled)
     } else {
-      "Toque p/ ativar"
+      AppLabels.Tiles.tapToActivateSubtitle
     }
     tile.updateTile()
   }
 }
 
 /**
- * Opção A.2 — Bloco Direto: Modo Vibrar
+ * Opção A.2 — Toggle Ortogonal Não-Excludente: `Vibrar` (`vibrateEnabled`).
+ * Permanece `STATE_ACTIVE` sempre que `vibrateEnabled == true` (tanto em Som quanto em Silêncio).
  */
 class VibrateModeTileService : BaseSoundTileService() {
 
   override suspend fun handleTileClick(app: ManageSoundApplication) {
-    val current = app.container.soundSystemController.readCurrentMode()
-    val target = if (current == SoundMode.VIBRATE) SoundMode.NORMAL else SoundMode.VIBRATE
-    app.container.soundModeRepository.setSoundMode(
-      mode = target,
+    val controller = app.container.soundSystemController
+    val currentState = controller.readSoundState()
+    if (currentState.audioMode == BaseAudioMode.SILENT &&
+      currentState.vibrateEnabled &&
+      !controller.hasDndPermission()
+    ) {
+      openDndPermissionSettings()
+      return
+    }
+    app.container.soundModeRepository.toggleVibrate(
       source = TransitionTriggerSource.QUICK_TILE,
     )
+    if (currentState.audioMode == BaseAudioMode.SOUND && !controller.canWriteSystemSettings()) {
+      openWriteSettingsPermissionSettings()
+    }
   }
 
   override suspend fun refreshTileState() {
     val tile = qsTile ?: return
     val app = applicationContext as? ManageSoundApplication ?: return
-    val mode = app.container.soundSystemController.readCurrentMode()
-    val streams = app.container.soundSystemController.readVolumeStreams()
-    val isActive = mode == SoundMode.VIBRATE
+    val controller = app.container.soundSystemController
+    val state = controller.readSoundState()
+    val isActive = state.vibrateEnabled
 
     tile.state = if (isActive) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
     tile.icon = Icon.createWithResource(this, R.drawable.ic_widget_vibration)
-    tile.label = "Vibrar"
-    tile.subtitle = if (isActive) {
-      "Ativo • Mídia ${streams.mediaPercent}%"
+    tile.label = AppLabels.Tiles.vibrateLabel
+    tile.subtitle = if (state.audioMode == BaseAudioMode.SOUND && !controller.canWriteSystemSettings()) {
+      AppLabels.Tiles.authorizeWriteSettingsSubtitle
     } else {
-      "Toque p/ vibrar"
+      AppLabels.Tiles.vibrateTileSubtitle(state.vibrateEnabled, state.audioMode)
     }
     tile.updateTile()
   }
 }
 
 /**
- * Opção A.3 — Bloco Direto: Modo Silencioso
+ * Opção A.3 — Bloco Direto: Eixo de Áudio `Silêncio` (`BaseAudioMode.SILENT`), preservando vibração.
  */
 class SilentModeTileService : BaseSoundTileService() {
 
   override suspend fun handleTileClick(app: ManageSoundApplication) {
-    if (!app.container.soundSystemController.hasDndPermission()) {
+    val controller = app.container.soundSystemController
+    val currentState = controller.readSoundState()
+    val targetAudioMode = if (currentState.audioMode == BaseAudioMode.SILENT) {
+      BaseAudioMode.SOUND
+    } else {
+      BaseAudioMode.SILENT
+    }
+    if (!currentState.vibrateEnabled && !controller.hasDndPermission()) {
       openDndPermissionSettings()
       return
     }
-    val current = app.container.soundSystemController.readCurrentMode()
-    val target = if (current == SoundMode.SILENT) SoundMode.NORMAL else SoundMode.SILENT
-    app.container.soundModeRepository.setSoundMode(
-      mode = target,
+    app.container.soundModeRepository.setBaseAudioMode(
+      audioMode = targetAudioMode,
       source = TransitionTriggerSource.QUICK_TILE,
     )
   }
@@ -306,18 +372,19 @@ class SilentModeTileService : BaseSoundTileService() {
   override suspend fun refreshTileState() {
     val tile = qsTile ?: return
     val app = applicationContext as? ManageSoundApplication ?: return
-    val hasDnd = app.container.soundSystemController.hasDndPermission()
-    val mode = app.container.soundSystemController.readCurrentMode()
-    val streams = app.container.soundSystemController.readVolumeStreams()
-    val isActive = mode == SoundMode.SILENT
+    val controller = app.container.soundSystemController
+    val hasDnd = controller.hasDndPermission()
+    val state = controller.readSoundState()
+    val streams = controller.readVolumeStreams()
+    val isActive = state.audioMode == BaseAudioMode.SILENT
 
     tile.state = if (isActive) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
     tile.icon = Icon.createWithResource(this, R.drawable.ic_widget_silent)
-    tile.label = "Silêncio"
+    tile.label = AppLabels.Tiles.silentLabel
     tile.subtitle = when {
-      !hasDnd -> "Autorizar DND"
-      isActive -> "Ativo • Alarme ${streams.alarmPercent}%"
-      else -> "Toque p/ silenciar"
+      !state.vibrateEnabled && !hasDnd -> AppLabels.Tiles.authorizeDndSubtitle
+      isActive -> AppLabels.Tiles.silentActiveSubtitle(streams.alarmPercent, state.vibrateEnabled)
+      else -> AppLabels.Tiles.tapToSilenceSubtitle
     }
     tile.updateTile()
   }
@@ -335,8 +402,12 @@ abstract class BaseProfileSlotTileService(
     val profiles = app.container.soundModeRepository.profilesStream.first()
     val targetId = if (slotIndex == 1) prefs.quickTileSlot1ProfileId else prefs.quickTileSlot2ProfileId
     val targetProfile = profiles.firstOrNull { it.id == targetId } ?: profiles.firstOrNull() ?: return
+    val targetState = targetProfile.resolvedSoundState
 
-    if (targetProfile.mode == SoundMode.SILENT && !app.container.soundSystemController.hasDndPermission()) {
+    if (targetState.audioMode == BaseAudioMode.SILENT &&
+      !targetState.vibrateEnabled &&
+      !app.container.soundSystemController.hasDndPermission()
+    ) {
       openDndPermissionSettings()
       return
     }
@@ -349,8 +420,8 @@ abstract class BaseProfileSlotTileService(
           source = TransitionTriggerSource.QUICK_TILE,
         )
       } else {
-        app.container.soundModeRepository.setSoundMode(
-          mode = SoundMode.NORMAL,
+        app.container.soundModeRepository.setBaseAudioMode(
+          audioMode = BaseAudioMode.SOUND,
           source = TransitionTriggerSource.QUICK_TILE,
         )
       }
@@ -372,24 +443,25 @@ abstract class BaseProfileSlotTileService(
 
     if (targetProfile == null) {
       tile.state = Tile.STATE_INACTIVE
-      tile.label = "Perfil $slotIndex"
-      tile.subtitle = "Configure no app"
+      tile.label = AppLabels.Tiles.profileSlotFallbackLabel(slotIndex)
+      tile.subtitle = AppLabels.Tiles.configureInAppSubtitle
       tile.updateTile()
       return
     }
 
     val isActive = prefs.activeProfileId == targetProfile.id
-    val iconRes = when (targetProfile.mode) {
-      SoundMode.NORMAL -> R.drawable.ic_widget_volume_up
-      SoundMode.VIBRATE -> R.drawable.ic_widget_vibration
-      SoundMode.SILENT -> R.drawable.ic_widget_silent
+    val targetState = targetProfile.resolvedSoundState
+    val iconRes = when (targetState.audioMode) {
+      BaseAudioMode.SOUND -> R.drawable.ic_widget_volume_up
+      BaseAudioMode.SILENT ->
+        if (targetState.vibrateEnabled) R.drawable.ic_widget_vibration else R.drawable.ic_widget_silent
     }
 
     tile.state = if (isActive) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
     tile.icon = Icon.createWithResource(this, iconRes)
     tile.label = targetProfile.name
     tile.subtitle = if (isActive) {
-      "Ativo • ${targetProfile.mode.title}"
+      AppLabels.Tiles.profileActiveSubtitle(targetState.title)
     } else {
       targetProfile.summaryLabel()
     }
@@ -411,16 +483,19 @@ class QuickTimerTileService : BaseSoundTileService() {
     val activeTimer = prefs.activeTimer
 
     if (activeTimer == null) {
-      val currentMode = app.container.soundSystemController.readCurrentMode()
-      val targetMode = if (currentMode == SoundMode.NORMAL) SoundMode.VIBRATE else currentMode
+      val currentState = app.container.soundSystemController.readSoundState()
+      val targetState = if (currentState.audioMode == BaseAudioMode.SOUND) {
+        SoundState(audioMode = BaseAudioMode.SILENT, vibrateEnabled = true)
+      } else {
+        currentState
+      }
       lastTapTimestampMillis = now
-      app.container.soundModeRepository.startTimedSession(
-        targetMode = targetMode,
+      app.container.soundModeRepository.startTimedStateSession(
+        targetState = targetState,
         durationMinutes = 30,
         nowEpochMillis = now,
       )
     } else if (now - lastTapTimestampMillis <= 8_000L && activeTimer.durationMinutes < 120) {
-      // Toque consecutivo rápido escala de 30m -> 60m -> 120m
       lastTapTimestampMillis = now
       val addMinutes = if (activeTimer.durationMinutes < 60) 30 else 60
       app.container.soundModeRepository.extendTimedSession(
@@ -443,12 +518,12 @@ class QuickTimerTileService : BaseSoundTileService() {
     tile.icon = Icon.createWithResource(this, R.drawable.ic_qs_timer)
     if (activeTimer != null && remainingMin != null && remainingMin > 0) {
       tile.state = Tile.STATE_ACTIVE
-      tile.label = "Timer • ${remainingMin}m"
-      tile.subtitle = "${activeTimer.targetMode.title} • Toque: +30m / Fim"
+      tile.label = AppLabels.Tiles.timerActiveLabel(remainingMin)
+      tile.subtitle = AppLabels.Tiles.timerActiveSubtitle(activeTimer.resolvedSoundState.title)
     } else {
       tile.state = Tile.STATE_INACTIVE
-      tile.label = "Timer Silêncio"
-      tile.subtitle = "Toque: 30m • 1h • 2h"
+      tile.label = AppLabels.Tiles.quickTimerInactiveLabel
+      tile.subtitle = AppLabels.Tiles.quickTimerInactiveSubtitle
     }
     tile.updateTile()
   }
@@ -479,11 +554,11 @@ class MediaMuteTileService : BaseSoundTileService() {
     tile.icon = Icon.createWithResource(this, R.drawable.ic_qs_media_mute)
     if (isMediaMuted) {
       val restoreTarget = prefs.savedMediaBeforeMute ?: 50
-      tile.label = "Mídia Zerada"
-      tile.subtitle = "0% • Toque restaura ${restoreTarget}%"
+      tile.label = AppLabels.Tiles.mediaMutedLabel
+      tile.subtitle = AppLabels.Tiles.mediaMutedSubtitle(restoreTarget)
     } else {
-      tile.label = "Zero Mídia"
-      tile.subtitle = "Mídia ${streams.mediaPercent}% • Toque p/ 0%"
+      tile.label = AppLabels.Tiles.zeroMediaLabel
+      tile.subtitle = AppLabels.Tiles.mediaActiveSubtitle(streams.mediaPercent)
     }
     tile.updateTile()
   }

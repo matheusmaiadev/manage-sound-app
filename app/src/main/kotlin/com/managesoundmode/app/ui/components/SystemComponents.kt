@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -81,13 +82,18 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.ui.common.AppLabels
@@ -96,6 +102,8 @@ import com.managesoundmode.app.ui.theme.onActivePillColor
 import com.managesoundmode.app.ui.theme.onTonalContainerColor
 import com.managesoundmode.app.ui.theme.tonalAccentColor
 import com.managesoundmode.app.ui.theme.tonalContainerColor
+import com.managesoundmode.app.ui.theme.zenithOnActivePillColor
+import com.managesoundmode.app.ui.theme.zenithVibrateAccentColor
 import kotlin.math.roundToInt
 
 /**
@@ -136,8 +144,183 @@ fun SoundMode.modeIcon(): ImageVector = when (this) {
   SoundMode.SILENT -> Icons.Default.DoNotDisturbOn
 }
 
+fun BaseAudioMode.audioModeIcon(): ImageVector = when (this) {
+  BaseAudioMode.SOUND -> Icons.Default.NotificationsActive
+  BaseAudioMode.SILENT -> Icons.Default.DoNotDisturbOn
+}
+
 /**
- * Switch ZENITH com ícone `Check` (`✓`) quando ativo e feedback tátil.
+ * Componente Split Capsule `2 + 1` do Design System ZENITH (SPEC-004):
+ * - Cápsula esquerda (`weight(2f)`): Segmented exclusivo `[ Som | Silêncio ]`
+ * - Cápsula direita (`weight(1f)`): Toggle ortogonal independente `[ Vibrar ]`
+ */
+@Composable
+fun ZenithSplitModeAndVibrateRow(
+  audioMode: BaseAudioMode,
+  vibrateEnabled: Boolean,
+  onSelectAudioMode: (BaseAudioMode) -> Unit,
+  onToggleVibrate: () -> Unit,
+  soundButtonTag: String,
+  silentButtonTag: String,
+  vibrateButtonTag: String,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    // 1. Cápsula Esquerda — Segmented Audio Pill (weight 2f)
+    Surface(
+      shape = RoundedCornerShape(24.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      modifier = Modifier.weight(2f),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        BaseAudioMode.entries.forEach { mode ->
+          val isSelected = audioMode == mode
+          val modeAccent = mode.tonalAccentColor()
+          val pillBg by animateColorAsState(
+            targetValue = if (isSelected) modeAccent else Color.Transparent,
+            animationSpec = tween(180),
+            label = "zenithSplitAudioBg_${mode.name}",
+          )
+          val pillContent by animateColorAsState(
+            targetValue = if (isSelected) {
+              zenithOnActivePillColor()
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            animationSpec = tween(180),
+            label = "zenithSplitAudioContent_${mode.name}",
+          )
+          val buttonTag = if (mode == BaseAudioMode.SOUND) soundButtonTag else silentButtonTag
+
+          Surface(
+            modifier = Modifier
+              .weight(1f)
+              .heightIn(min = 44.dp)
+              .clip(RoundedCornerShape(19.dp))
+              .clickable { onSelectAudioMode(mode) }
+              .semantics {
+                selected = isSelected
+                contentDescription = AppLabels.Now.audioModeContentDescription(mode)
+              }
+              .testTag(buttonTag),
+            shape = RoundedCornerShape(19.dp),
+            color = pillBg,
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 10.dp),
+              horizontalArrangement = Arrangement.Center,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = mode.audioModeIcon(),
+                contentDescription = null,
+                tint = pillContent,
+                modifier = Modifier.size(17.dp),
+              )
+              Spacer(modifier = Modifier.width(5.dp))
+              Text(
+                text = AppLabels.Now.audioModeShortPill(mode),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = pillContent,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Cápsula Direita — Orthogonal Vibrate Toggle Pill (weight 1f)
+    val vibrateAccent = zenithVibrateAccentColor()
+    val vibrateBg by animateColorAsState(
+      targetValue = if (vibrateEnabled) {
+        vibrateAccent
+      } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+      },
+      animationSpec = tween(180),
+      label = "zenithSplitVibrateBg",
+    )
+    val vibrateBorder by animateColorAsState(
+      targetValue = if (vibrateEnabled) {
+        vibrateAccent
+      } else {
+        MaterialTheme.colorScheme.outlineVariant
+      },
+      animationSpec = tween(180),
+      label = "zenithSplitVibrateBorder",
+    )
+    val vibrateContent by animateColorAsState(
+      targetValue = if (vibrateEnabled) {
+        zenithOnActivePillColor()
+      } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+      },
+      animationSpec = tween(180),
+      label = "zenithSplitVibrateContent",
+    )
+
+    Surface(
+      modifier = Modifier
+        .weight(1f)
+        .heightIn(min = 54.dp)
+        .clip(RoundedCornerShape(24.dp))
+        .clickable { onToggleVibrate() }
+        .semantics {
+          selected = vibrateEnabled
+          contentDescription = AppLabels.Now.vibrateToggleContentDescription(vibrateEnabled)
+        }
+        .testTag(vibrateButtonTag),
+      shape = RoundedCornerShape(24.dp),
+      color = vibrateBg,
+      border = BorderStroke(1.dp, vibrateBorder),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 8.dp, vertical = 15.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Vibration,
+          contentDescription = null,
+          tint = vibrateContent,
+          modifier = Modifier.size(17.dp),
+        )
+        Spacer(modifier = Modifier.width(5.dp))
+        Text(
+          text = AppLabels.Now.vibrateShortPill,
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = if (vibrateEnabled) FontWeight.Bold else FontWeight.Medium,
+          color = vibrateContent,
+          maxLines = 1,
+          softWrap = false,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Switch ZENITH com ícone `Check` quando ativo e feedback tátil.
  */
 @Composable
 fun M3CheckSwitch(
@@ -330,15 +513,22 @@ fun ProfileEditorBottomSheet(
   initialProfile: SoundProfile?,
   defaultMode: SoundMode,
   defaultStreams: VolumeStreams,
+  defaultSoundState: SoundState = SoundState.fromLegacyMode(defaultMode),
   onSaveProfile: (profile: SoundProfile, applyNow: Boolean) -> Unit,
   onAutoSaveProfile: (profile: SoundProfile) -> Unit = {},
   onDeleteProfile: ((profileId: String) -> Unit)? = null,
   onDismiss: () -> Unit,
 ) {
+  val haptics = LocalHapticFeedback.current
   val isEditing = initialProfile != null
   var name by rememberSaveable { mutableStateOf(initialProfile?.name ?: "") }
   var iconKey by rememberSaveable { mutableStateOf(initialProfile?.iconKey ?: "work") }
-  var selectedMode by rememberSaveable { mutableStateOf(initialProfile?.mode ?: defaultMode) }
+  var selectedAudioMode by rememberSaveable {
+    mutableStateOf(initialProfile?.resolvedAudioMode ?: defaultSoundState.audioMode)
+  }
+  var selectedVibrateEnabled by rememberSaveable {
+    mutableStateOf(initialProfile?.resolvedVibrateEnabled ?: defaultSoundState.vibrateEnabled)
+  }
   var ringPercent by rememberSaveable {
     mutableIntStateOf(initialProfile?.streams?.ringPercent ?: defaultStreams.ringPercent)
   }
@@ -361,7 +551,7 @@ fun ProfileEditorBottomSheet(
   }
 
   val iconOptions = AppLabels.Profiles.iconOptions()
-  val activeAccent = selectedMode.tonalAccentColor()
+  val activeAccent = selectedAudioMode.tonalAccentColor()
 
   fun buildProfile(): SoundProfile {
     val resolvedName = name.trim().ifEmpty {
@@ -373,12 +563,18 @@ fun ProfileEditorBottomSheet(
       mediaPercent = mediaPercent,
       alarmPercent = alarmPercent,
     )
+    val state = SoundState(
+      audioMode = selectedAudioMode,
+      vibrateEnabled = selectedVibrateEnabled,
+    )
     return SoundProfile(
       id = initialProfile?.id ?: "custom_${System.currentTimeMillis()}",
       name = resolvedName,
       description = initialProfile?.description
-        ?: AppLabels.Profiles.defaultStreamsDescription(streams),
-      mode = selectedMode,
+        ?: AppLabels.Domain.profileSummaryLabel(state, streams),
+      mode = state.toLegacyApproximation(),
+      audioMode = selectedAudioMode,
+      vibrateEnabled = selectedVibrateEnabled,
       streams = streams,
       isPreset = initialProfile?.isPreset ?: false,
       iconKey = iconKey,
@@ -523,7 +719,7 @@ fun ProfileEditorBottomSheet(
                     imageVector = profileIconForKey(key),
                     contentDescription = label,
                     tint = if (selected) {
-                      selectedMode.onActivePillColor()
+                      zenithOnActivePillColor()
                     } else {
                       MaterialTheme.colorScheme.onSurfaceVariant
                     },
@@ -561,80 +757,29 @@ fun ProfileEditorBottomSheet(
             .testTag(AppTestTags.Profiles.NAME_INPUT),
         )
 
-        // Seletor Triplo de Modo ZENITH
+        // Seletor Split Capsule 2 + 1 ZENITH ([Som | Silêncio] + [Vibrar])
         Text(
           text = AppLabels.Profiles.baseSoundModeSectionTitle,
           style = MaterialTheme.typography.titleSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Surface(
-          shape = RoundedCornerShape(22.dp),
-          color = MaterialTheme.colorScheme.surfaceContainerLow,
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            SoundMode.entries.forEach { mode ->
-              val selected = selectedMode == mode
-              val modeAccent = mode.tonalAccentColor()
-              val bg by animateColorAsState(
-                targetValue = if (selected) modeAccent else Color.Transparent,
-                animationSpec = tween(180),
-                label = "profileEditorModeBg_${mode.name}",
-              )
-              val contentColor by animateColorAsState(
-                targetValue = if (selected) {
-                  mode.onActivePillColor()
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                animationSpec = tween(180),
-                label = "profileEditorModeContent_${mode.name}",
-              )
-
-              Surface(
-                modifier = Modifier
-                  .weight(1f)
-                  .clip(RoundedCornerShape(16.dp))
-                  .clickable {
-                    selectedMode = mode
-                    notifyAutoSaveIfEditing()
-                  },
-                shape = RoundedCornerShape(16.dp),
-                color = bg,
-              ) {
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 12.dp),
-                  horizontalArrangement = Arrangement.Center,
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  Icon(
-                    imageVector = mode.modeIcon(),
-                    contentDescription = null,
-                    tint = contentColor,
-                    modifier = Modifier.size(18.dp),
-                  )
-                  Spacer(modifier = Modifier.width(6.dp))
-                  Text(
-                    text = AppLabels.Now.modeShortPill(mode),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color = contentColor,
-                    maxLines = 1,
-                    softWrap = false,
-                  )
-                }
-              }
-            }
-          }
-        }
+        ZenithSplitModeAndVibrateRow(
+          audioMode = selectedAudioMode,
+          vibrateEnabled = selectedVibrateEnabled,
+          onSelectAudioMode = { mode ->
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            selectedAudioMode = mode
+            notifyAutoSaveIfEditing()
+          },
+          onToggleVibrate = {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            selectedVibrateEnabled = !selectedVibrateEnabled
+            notifyAutoSaveIfEditing()
+          },
+          soundButtonTag = AppTestTags.Profiles.EDITOR_AUDIO_SOUND_BUTTON,
+          silentButtonTag = AppTestTags.Profiles.EDITOR_AUDIO_SILENT_BUTTON,
+          vibrateButtonTag = AppTestTags.Profiles.EDITOR_VIBRATE_TOGGLE,
+        )
 
         // Cápsulas dos 4 Canais do Perfil
         Surface(
@@ -777,7 +922,7 @@ fun ProfileEditorBottomSheet(
               shape = RoundedCornerShape(18.dp),
               colors = ButtonDefaults.buttonColors(
                 containerColor = activeAccent,
-                contentColor = selectedMode.onActivePillColor(),
+                contentColor = zenithOnActivePillColor(),
               ),
               modifier = Modifier
                 .weight(1f)
@@ -792,7 +937,7 @@ fun ProfileEditorBottomSheet(
             shape = RoundedCornerShape(18.dp),
             colors = ButtonDefaults.buttonColors(
               containerColor = activeAccent,
-              contentColor = selectedMode.onActivePillColor(),
+              contentColor = zenithOnActivePillColor(),
             ),
             modifier = Modifier
               .fillMaxWidth()

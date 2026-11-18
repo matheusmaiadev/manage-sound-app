@@ -1,12 +1,17 @@
 package com.managesoundmode.app.e2e
 
 import android.content.Context
+import android.media.AudioManager
+import android.os.ParcelFileDescriptor
+import android.provider.Settings
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -14,11 +19,13 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.managesoundmode.app.MainActivity
 import com.managesoundmode.app.ManageSoundApplication
+import com.managesoundmode.app.data.local.PersistedSoundPrefs
 import com.managesoundmode.app.domain.model.AppAccessRole
-import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.RestorePolicy
-import com.managesoundmode.app.domain.model.SoundMode
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.ThemeMode
+import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.system.BackgroundGeofenceManager
 import com.managesoundmode.app.system.SystemZenRuleManager
 import com.managesoundmode.app.ui.common.AppLabels
@@ -26,6 +33,7 @@ import com.managesoundmode.app.ui.common.AppLanguage
 import com.managesoundmode.app.ui.common.AppTestTags
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -48,15 +56,40 @@ class ManageSoundModeE2ETest {
   private val app: ManageSoundApplication
     get() = ApplicationProvider.getApplicationContext<Context>() as ManageSoundApplication
 
+  private fun execShellCommandSync(command: String) {
+    runCatching {
+      val pfd = InstrumentationRegistry.getInstrumentation()
+        .uiAutomation
+        .executeShellCommand(command)
+      ParcelFileDescriptor.AutoCloseInputStream(pfd).use { it.readBytes() }
+    }
+  }
+
+  private fun awaitPrefs(
+    label: String = "prefs",
+    timeoutMillis: Long = 5_000L,
+    predicate: (PersistedSoundPrefs) -> Boolean = { true },
+  ): PersistedSoundPrefs {
+    var latest: PersistedSoundPrefs? = null
+    try {
+      composeRule.waitUntil(timeoutMillis = timeoutMillis) {
+        val current = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+        latest = current
+        predicate(current)
+      }
+    } catch (e: Throwable) {
+      throw AssertionError(
+        "awaitPrefs($label) timed out; customProfiles=${latest?.customProfiles?.map { it.name }}, schedules=${latest?.scheduleRules?.map { it.name }}, locations=${latest?.locationRules?.map { it.name }}, paused=${latest?.automationsPaused}, activeProfile=${latest?.activeProfileId}",
+        e,
+      )
+    }
+    return latest ?: runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+  }
+
   @Before
   fun setUp() {
     AppLabels.currentLanguage = AppLanguage.PT_BR
-    runCatching {
-      InstrumentationRegistry.getInstrumentation()
-        .uiAutomation
-        .executeShellCommand("cmd notification allow_dnd ${app.packageName}")
-        .close()
-    }
+    execShellCommandSync("cmd notification allow_dnd ${app.packageName}")
     runBlocking {
       val prefs = app.container.preferencesDataSource
       prefs.resetFactoryDefaults()
@@ -66,6 +99,7 @@ class ManageSoundModeE2ETest {
       prefs.setAppLanguageCode("PT_BR")
       prefs.setLocationDisclosureAccepted(false)
       prefs.setOnboardingCompleted(true)
+      app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
       app.container.soundModeRepository.refreshSystemState()
     }
     composeRule.waitForIdle()
@@ -106,7 +140,7 @@ class ManageSoundModeE2ETest {
 
     // Verifica que fechou o Onboarding, abriu a aba Agora e persistiu no DataStore real
     composeRule.onNodeWithTag(AppTestTags.Now.HERO_MODE_CARD).assertIsDisplayed()
-    val savedPrefs = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val savedPrefs = awaitPrefs { it.hasCompletedOnboarding && it.defaultDayProfileId == "preset_home" }
     assertTrue(savedPrefs.hasCompletedOnboarding)
     assertEquals("preset_home", savedPrefs.defaultDayProfileId)
   }
@@ -119,11 +153,11 @@ class ManageSoundModeE2ETest {
 
     // 2. Criar um novo perfil customizado pelo FAB
     composeRule.onNodeWithTag(AppTestTags.Fab.SAVE_PROFILE_BUTTON).performClick()
-    composeRule.onNodeWithTag(AppTestTags.Profiles.NAME_INPUT).performTextInput("Estudo E2E")
+    composeRule.onNodeWithTag(AppTestTags.Profiles.NAME_INPUT).performTextReplacement("Estudo E2E")
     composeRule.onNodeWithTag(AppTestTags.Profiles.CONFIRM_SAVE_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterCreate = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterCreate = awaitPrefs { it.customProfiles.any { p -> p.name == "Estudo E2E" } }
     assertTrue(prefsAfterCreate.customProfiles.any { it.name == "Estudo E2E" })
 
     // 3. Duplicar um perfil pelo menu contextual (⋮)
@@ -131,7 +165,7 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.Profiles.menuDuplicateItem("preset_work")).performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterDuplicate = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterDuplicate = awaitPrefs { it.customProfiles.any { p -> p.name.contains("(Cópia)") } }
     assertTrue(prefsAfterDuplicate.customProfiles.any { it.name.contains("(Cópia)") })
 
     // 4. Ativar o perfil "Trabalho (Vibrar)" e validar retorno automático para a aba Agora
@@ -139,23 +173,23 @@ class ManageSoundModeE2ETest {
     composeRule.waitForIdle()
 
     composeRule.onNodeWithTag(AppTestTags.Now.HERO_MODE_CARD).assertIsDisplayed()
-    val prefsAfterActivate = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterActivate = awaitPrefs { it.activeProfileId == "preset_work" && it.transitionLogs.isNotEmpty() }
     assertEquals("preset_work", prefsAfterActivate.activeProfileId)
     assertTrue(prefsAfterActivate.transitionLogs.isNotEmpty())
   }
 
   @Test
   fun e2e03_nowTab_soundModeSwitchAndContextualTimerLifecycleWithRealDataStore() {
-    // 1. Alternar para modo Vibrar no Hero Card
+    // 1. Alternar para Silêncio + Vibrar pela Split Capsule 2+1 no Hero Card
     composeRule.onNodeWithTag(AppTestTags.Now.HERO_MODE_CARD).assertIsDisplayed()
-    composeRule.onNodeWithTag(AppTestTags.Now.modeButton(SoundMode.VIBRATE)).performClick()
+    composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
     composeRule.waitForIdle()
 
     // 2. Iniciar Timer Contextual de 30 minutos
     composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).performClick()
     composeRule.waitForIdle()
 
-    val prefsWithTimer = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsWithTimer = awaitPrefs { it.activeTimer != null }
     assertNotNull(prefsWithTimer.activeTimer)
     assertEquals(30, prefsWithTimer.activeTimer?.durationMinutes)
 
@@ -163,14 +197,14 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.Now.EXTEND_TIMER_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsExtended = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsExtended = awaitPrefs { it.activeTimer?.durationMinutes == 60 }
     assertEquals(60, prefsExtended.activeTimer?.durationMinutes)
 
     // 4. Cancelar/Restaurar Timer antecipadamente
     composeRule.onNodeWithTag(AppTestTags.Now.CANCEL_TIMER_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsCancelled = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsCancelled = awaitPrefs { it.activeTimer == null }
     assertNull(prefsCancelled.activeTimer)
   }
 
@@ -181,12 +215,11 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.Schedules.LIST).assertIsDisplayed()
 
     composeRule.onNodeWithTag(AppTestTags.Fab.ADD_SCHEDULE_FAB).performClick()
-    composeRule.onNodeWithTag(AppTestTags.Schedules.NAME_INPUT).performTextClearance()
-    composeRule.onNodeWithTag(AppTestTags.Schedules.NAME_INPUT).performTextInput("Plantão E2E")
+    composeRule.onNodeWithTag(AppTestTags.Schedules.NAME_INPUT).performTextReplacement("Plantão E2E")
     composeRule.onNodeWithTag(AppTestTags.Schedules.CONFIRM_SAVE_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterSchedule = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterSchedule = awaitPrefs { it.scheduleRules.any { r -> r.name == "Plantão E2E" } }
     assertTrue(prefsAfterSchedule.scheduleRules.any { it.name == "Plantão E2E" })
 
     // 2. Aba Locais: clicar em + Novo Local -> aceitar Prominent Disclosure -> salvar local
@@ -197,12 +230,13 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.Locations.ACCEPT_DISCLOSURE_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    composeRule.onNodeWithTag(AppTestTags.Locations.NAME_INPUT).performTextClearance()
-    composeRule.onNodeWithTag(AppTestTags.Locations.NAME_INPUT).performTextInput("Escritório E2E")
+    composeRule.onNodeWithTag(AppTestTags.Locations.NAME_INPUT).performTextReplacement("Escritório E2E")
     composeRule.onNodeWithTag(AppTestTags.Locations.CONFIRM_SAVE_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterLocation = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterLocation = awaitPrefs {
+      it.hasAcceptedLocationDisclosure && it.locationRules.any { r -> r.name == "Escritório E2E" }
+    }
     assertTrue(prefsAfterLocation.hasAcceptedLocationDisclosure)
     assertTrue(prefsAfterLocation.locationRules.any { it.name == "Escritório E2E" })
 
@@ -211,7 +245,7 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.TopBar.MENU_PAUSE_AUTOMATIONS).performClick()
     composeRule.waitForIdle()
 
-    val prefsPaused = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsPaused = awaitPrefs { it.automationsPaused }
     assertTrue(prefsPaused.automationsPaused)
   }
 
@@ -239,9 +273,17 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.Settings.defaultTimerChip(60)).performClick()
     composeRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
     composeRule.waitForIdle()
+    awaitPrefs {
+      it.themeMode == ThemeMode.LIGHT &&
+        it.restorePolicy == RestorePolicy.SNAPSHOT &&
+        it.defaultTimerMinutes == 60
+    }
 
     // 5. Sub-tela Backup & Restaurar Padrões: Exportar JSON
-    composeRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET).performScrollTo().performClick()
+    composeRule
+      .onNodeWithTag(AppTestTags.Settings.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET))
+    composeRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET).performClick()
     composeRule.onNodeWithTag(AppTestTags.Settings.EXPORT_BACKUP_BUTTON).performClick()
     composeRule.waitForIdle()
 
@@ -253,19 +295,28 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.Settings.CONFIRM_RESET_DEFAULTS_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterReset = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterReset = awaitPrefs {
+      it.restorePolicy == RestorePolicy.DEFAULT_PROFILE && it.defaultTimerMinutes == 30
+    }
     assertEquals(RestorePolicy.DEFAULT_PROFILE, prefsAfterReset.restorePolicy)
     assertEquals(30, prefsAfterReset.defaultTimerMinutes)
 
     // 7. Reabrir Backup & Restaurar Padrões e importar o JSON exportado
-    composeRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET).performScrollTo().performClick()
+    composeRule
+      .onNodeWithTag(AppTestTags.Settings.LIST)
+      .performScrollToNode(hasTestTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET))
+    composeRule.onNodeWithTag(AppTestTags.Settings.CATEGORY_BACKUP_RESET).performClick()
     composeRule
       .onNodeWithTag(AppTestTags.Settings.IMPORT_BACKUP_INPUT)
       .performTextReplacement(exportedJson)
     composeRule.onNodeWithTag(AppTestTags.Settings.IMPORT_BACKUP_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterImport = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterImport = awaitPrefs {
+      it.restorePolicy == RestorePolicy.SNAPSHOT &&
+        it.defaultTimerMinutes == 60 &&
+        it.themeMode == ThemeMode.LIGHT
+    }
     assertEquals(RestorePolicy.SNAPSHOT, prefsAfterImport.restorePolicy)
     assertEquals(60, prefsAfterImport.defaultTimerMinutes)
     assertEquals(ThemeMode.LIGHT, prefsAfterImport.themeMode)
@@ -288,14 +339,14 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.AccessControl.SAVE_PIN_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterPin = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterPin = awaitPrefs { it.accessControlConfig.pinCode == "4210" }
     assertEquals("4210", prefsAfterPin.accessControlConfig.pinCode)
 
     // 3. Mudar Papel para Somente Leitura (VIEWER) -> 0 permissões concedidas
     composeRule.onNodeWithTag(AppTestTags.AccessControl.roleCard(AppAccessRole.VIEWER)).performClick()
     composeRule.waitForIdle()
 
-    val prefsViewer = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsViewer = awaitPrefs { it.accessControlConfig.activeRole == AppAccessRole.VIEWER }
     assertEquals(AppAccessRole.VIEWER, prefsViewer.accessControlConfig.activeRole)
     assertTrue(prefsViewer.accessControlConfig.grantedPermissions.isEmpty())
 
@@ -303,15 +354,15 @@ class ManageSoundModeE2ETest {
     composeRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
     composeRule.onNodeWithTag(AppTestTags.TopBar.ROLE_BADGE_CHIP).assertIsDisplayed()
 
-    composeRule.onNodeWithTag(AppTestTags.Now.modeButton(SoundMode.VIBRATE)).performClick()
+    composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
     composeRule.waitForIdle()
-    val prefsBlockedMode = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsBlockedMode = awaitPrefs()
     assertTrue(prefsBlockedMode.transitionLogs.isEmpty())
 
     composeRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
     composeRule.onNodeWithTag(AppTestTags.TopBar.MENU_PAUSE_AUTOMATIONS).performClick()
     composeRule.waitForIdle()
-    val prefsStillUnpaused = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsStillUnpaused = awaitPrefs()
     assertEquals(false, prefsStillUnpaused.automationsPaused)
 
     // 5. Clicar no ROLE_BADGE_CHIP no TopBar abre o desafio de PIN; inserir PIN correto ("4210") e desbloquear Admin
@@ -325,15 +376,15 @@ class ManageSoundModeE2ETest {
       .performClick()
     composeRule.waitForIdle()
 
-    val prefsAdminRestored = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAdminRestored = awaitPrefs { it.accessControlConfig.activeRole == AppAccessRole.ADMIN }
     assertEquals(AppAccessRole.ADMIN, prefsAdminRestored.accessControlConfig.activeRole)
 
-    // 6. Agora como Admin, alternar modo para Vibrar e iniciar Timer de 30m funciona normalmente
-    composeRule.onNodeWithTag(AppTestTags.Now.modeButton(SoundMode.VIBRATE)).performClick()
+    // 6. Agora como Admin, alternar modo para Silêncio + Vibrar e iniciar Timer de 30m funciona normalmente
+    composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
     composeRule.waitForIdle()
     composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).performClick()
     composeRule.waitForIdle()
-    val prefsAfterAllowedAction = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterAllowedAction = awaitPrefs { it.activeTimer != null }
     assertNotNull(prefsAfterAllowedAction.activeTimer)
   }
 
@@ -349,6 +400,7 @@ class ManageSoundModeE2ETest {
 
     composeRule.onNodeWithTag(AppTestTags.Locations.switch("loc_college")).performClick()
     composeRule.waitForIdle()
+    awaitPrefs { it.locationRules.first { r -> r.id == "loc_college" }.enabled }
 
     // 2. [GEO-01] Simular sinal de entrada em background sem Wi-Fi (Dwell pendente de 2 min)
     val t0 = 1_750_000_000_000L
@@ -415,8 +467,130 @@ class ManageSoundModeE2ETest {
       .performClick()
     composeRule.waitForIdle()
 
-    val prefsAfterToggleOff = runBlocking { app.container.preferencesDataSource.prefsFlow.first() }
+    val prefsAfterToggleOff = awaitPrefs { !it.systemZenRulesEnabled }
     assertEquals(false, prefsAfterToggleOff.systemZenRulesEnabled)
     assertEquals(0, SystemZenRuleManager.countRegisteredRules(app))
+  }
+
+  @Test
+  fun e2e08_orthogonal2x2SoundAndVibrationMatrix_splitCapsuleWriteSettingsAndV1Migration() {
+    val audioManager = app.getSystemService(AudioManager::class.java)!!
+
+    try {
+      // Isola de qualquer horário do relógio real e revoga WRITE_SETTINGS sincronamente
+      execShellCommandSync("appops set ${app.packageName} WRITE_SETTINGS deny")
+      runBlocking {
+        app.container.preferencesDataSource.setAutomationsPaused(true)
+        app.container.soundSystemController.applySoundState(SoundState(BaseAudioMode.SOUND, true))
+        app.container.soundSystemController.applyStreamVolume(VolumeStreamType.MEDIA, 60)
+        app.container.soundModeRepository.refreshSystemState()
+      }
+      composeRule.waitForIdle()
+
+      // 1. Estado 1: Som + Vibrar (RINGER_MODE_NORMAL, sem timer contextual na aba Agora)
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SOUND_BUTTON).assertIsDisplayed()
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).assertIsDisplayed()
+      composeRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).assertIsDisplayed()
+      composeRule.onNodeWithTag(AppTestTags.Now.ORB_VIBRATE_BADGE).assertIsDisplayed()
+      composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).assertDoesNotExist()
+      assertEquals(AudioManager.RINGER_MODE_NORMAL, audioManager.ringerMode)
+
+      // 2. Estado 2: Alternar Vibrar em Som com WRITE_SETTINGS negada -> mantém NORMAL, não zera mídia e abre Banner Just-in-Time
+      composeRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).performClick()
+      composeRule.waitForIdle()
+      awaitPrefs { !it.soundVibrateEnabledFallback }
+
+      assertEquals(AudioManager.RINGER_MODE_NORMAL, audioManager.ringerMode)
+      assertTrue(app.container.soundSystemController.readVolumeStreams().mediaPercent > 0)
+      composeRule.onNodeWithTag(AppTestTags.Now.ORB_VIBRATE_BADGE).assertDoesNotExist()
+      composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).assertDoesNotExist()
+      composeRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_BANNER).assertIsDisplayed()
+
+      // Fechar banner pelo botão de dispensar funciona imediatamente
+      composeRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_DISMISS_BUTTON).performClick()
+      composeRule.waitForIdle()
+      composeRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_BANNER).assertDoesNotExist()
+
+      // 3. Concede WRITE_SETTINGS via appops -> alternar Vibrar em Som atualiza Settings.System sem reexibir Banner
+      execShellCommandSync("appops set ${app.packageName} WRITE_SETTINGS allow")
+      runBlocking {
+        app.container.soundModeRepository.refreshSystemState()
+      }
+      composeRule.waitForIdle()
+      assertTrue(app.container.soundSystemController.canWriteSystemSettings())
+
+      // Liga Vibrar em Som (vibrateEnabled -> true) e desliga novamente (vibrateEnabled -> false) já com WRITE_SETTINGS concedida
+      composeRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).performClick()
+      composeRule.waitForIdle()
+      awaitPrefs { it.soundVibrateEnabledFallback }
+      assertEquals(1, Settings.System.getInt(app.contentResolver, "vibrate_when_ringing"))
+      composeRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_BANNER).assertDoesNotExist()
+
+      composeRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).performClick()
+      composeRule.waitForIdle()
+      awaitPrefs { !it.soundVibrateEnabledFallback }
+      assertEquals(0, Settings.System.getInt(app.contentResolver, "vibrate_when_ringing"))
+      composeRule.onNodeWithTag(AppTestTags.Now.WRITE_SETTINGS_BANNER).assertDoesNotExist()
+
+      // 4. Estado 4: Trocar para Silêncio preservando vibrateEnabled = false -> RINGER_MODE_SILENT + Timer visível
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
+      composeRule.waitForIdle()
+      composeRule.waitUntil(5_000L) { audioManager.ringerMode == AudioManager.RINGER_MODE_SILENT }
+      composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).assertIsDisplayed()
+
+      // 5. Estado 3: Ligar Vibrar dentro de Silêncio -> RINGER_MODE_VIBRATE
+      composeRule.onNodeWithTag(AppTestTags.Now.VIBRATE_TOGGLE_BUTTON).performClick()
+      composeRule.waitForIdle()
+      composeRule.waitUntil(5_000L) { audioManager.ringerMode == AudioManager.RINGER_MODE_VIBRATE }
+      composeRule.onNodeWithTag(AppTestTags.Now.ORB_VIBRATE_BADGE).assertIsDisplayed()
+
+      // 6. Voltar para Som preservando vibrateEnabled = true -> RINGER_MODE_NORMAL
+      composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SOUND_BUTTON).performClick()
+      composeRule.waitForIdle()
+      composeRule.waitUntil(5_000L) { audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL }
+
+      // 7. Criar Perfil 2x2 ("Som Discreto E2E": SOUND + vibrateEnabled = false) e validar migração JSON v1 -> v2
+      composeRule.onNodeWithTag(AppTestTags.Tabs.PROFILES).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Fab.SAVE_PROFILE_BUTTON).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Profiles.NAME_INPUT).performTextReplacement("Som Discreto E2E")
+      composeRule.onNodeWithTag(AppTestTags.Profiles.EDITOR_AUDIO_SOUND_BUTTON).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Profiles.EDITOR_VIBRATE_TOGGLE).performClick()
+      composeRule.onNodeWithTag(AppTestTags.Profiles.CONFIRM_SAVE_BUTTON).performClick()
+      composeRule.waitForIdle()
+
+      val prefsWithCustom = awaitPrefs { it.customProfiles.any { p -> p.name == "Som Discreto E2E" } }
+      val savedCustom = prefsWithCustom.customProfiles.first { it.name == "Som Discreto E2E" }
+      assertEquals(SoundState(BaseAudioMode.SOUND, false), savedCustom.resolvedSoundState)
+
+      // Importar backup legado v1 sem campos audioMode/vibrateEnabled
+      val v1BackupJson = """
+        {"version":1,"customProfiles":[
+          {"id":"v1_n","name":"V1 Normal","description":"v1","mode":"NORMAL","streams":{"ringPercent":80,"notificationPercent":75,"mediaPercent":50,"alarmPercent":90},"isPreset":false},
+          {"id":"v1_v","name":"V1 Vibrar","description":"v1","mode":"VIBRATE","streams":{"ringPercent":0,"notificationPercent":0,"mediaPercent":0,"alarmPercent":85},"isPreset":false},
+          {"id":"v1_s","name":"V1 Silencio","description":"v1","mode":"SILENT","streams":{"ringPercent":0,"notificationPercent":0,"mediaPercent":0,"alarmPercent":100},"isPreset":false}
+        ]}
+      """.trimIndent()
+      runBlocking {
+        app.container.soundModeRepository.importBackupJson(v1BackupJson).getOrThrow()
+      }
+      val migratedPrefs = awaitPrefs { it.customProfiles.any { p -> p.id == "v1_n" } }
+      assertEquals(
+        SoundState(BaseAudioMode.SOUND, true),
+        migratedPrefs.customProfiles.first { it.id == "v1_n" }.resolvedSoundState,
+      )
+      assertEquals(
+        SoundState(BaseAudioMode.SILENT, true),
+        migratedPrefs.customProfiles.first { it.id == "v1_v" }.resolvedSoundState,
+      )
+      assertEquals(
+        SoundState(BaseAudioMode.SILENT, false),
+        migratedPrefs.customProfiles.first { it.id == "v1_s" }.resolvedSoundState,
+      )
+    } finally {
+      execShellCommandSync("appops set ${app.packageName} WRITE_SETTINGS default")
+      runBlocking {
+        app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
+      }
+    }
   }
 }

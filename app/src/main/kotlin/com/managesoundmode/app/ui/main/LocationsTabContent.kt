@@ -358,7 +358,7 @@ private fun LocationRuleCard(
   val haptics = LocalHapticFeedback.current
   var showContextMenu by remember { mutableStateOf(false) }
 
-  val modeAccent = targetProfile?.mode?.tonalAccentColor() ?: MaterialTheme.colorScheme.primary
+  val modeAccent = targetProfile?.resolvedAudioMode?.tonalAccentColor() ?: MaterialTheme.colorScheme.primary
   val containerColor = when {
     rule.enabled && rule.isCurrentlyInside -> MaterialTheme.colorScheme.surfaceContainerHigh
     rule.enabled -> MaterialTheme.colorScheme.surfaceContainerLow
@@ -632,7 +632,7 @@ private fun LocationRuleCard(
           Surface(
             shape = RoundedCornerShape(50),
             color = if (rule.enabled) {
-              targetProfile.mode.tonalContainerColor()
+              targetProfile.resolvedAudioMode.tonalContainerColor()
             } else {
               MaterialTheme.colorScheme.surfaceContainerHighest
             },
@@ -652,7 +652,7 @@ private fun LocationRuleCard(
                 contentDescription = null,
                 modifier = Modifier.size(14.dp),
                 tint = if (rule.enabled) {
-                  targetProfile.mode.onTonalContainerColor()
+                  targetProfile.resolvedAudioMode.onTonalContainerColor()
                 } else {
                   MaterialTheme.colorScheme.onSurfaceVariant
                 },
@@ -664,7 +664,7 @@ private fun LocationRuleCard(
                 maxLines = 1,
                 softWrap = false,
                 color = if (rule.enabled) {
-                  targetProfile.mode.onTonalContainerColor()
+                  targetProfile.resolvedAudioMode.onTonalContainerColor()
                 } else {
                   MaterialTheme.colorScheme.onSurfaceVariant
                 },

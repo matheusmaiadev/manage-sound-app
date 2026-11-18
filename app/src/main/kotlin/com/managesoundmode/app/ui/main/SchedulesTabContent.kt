@@ -196,7 +196,7 @@ private fun GoogleClockScheduleCard(
   val haptics = LocalHapticFeedback.current
   var showContextMenu by remember { mutableStateOf(false) }
 
-  val modeAccent = targetProfile?.mode?.tonalAccentColor() ?: MaterialTheme.colorScheme.primary
+  val modeAccent = targetProfile?.resolvedAudioMode?.tonalAccentColor() ?: MaterialTheme.colorScheme.primary
   val containerColor = if (rule.enabled) {
     MaterialTheme.colorScheme.surfaceContainerLow
   } else {
@@ -412,7 +412,7 @@ private fun GoogleClockScheduleCard(
           Surface(
             shape = RoundedCornerShape(50),
             color = if (rule.enabled) {
-              targetProfile.mode.tonalContainerColor()
+              targetProfile.resolvedAudioMode.tonalContainerColor()
             } else {
               MaterialTheme.colorScheme.surfaceContainerHighest
             },
@@ -423,13 +423,13 @@ private fun GoogleClockScheduleCard(
             },
           ) {
             Text(
-              text = "${targetProfile.name} • ${targetProfile.mode.title}",
+              text = "${targetProfile.name} • ${targetProfile.resolvedSoundState.title}",
               style = MaterialTheme.typography.labelMedium,
               fontWeight = FontWeight.SemiBold,
               maxLines = 1,
               softWrap = false,
               color = if (rule.enabled) {
-                targetProfile.mode.onTonalContainerColor()
+                targetProfile.resolvedAudioMode.onTonalContainerColor()
               } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
               },
@@ -510,7 +510,7 @@ internal fun ScheduleEditorBottomSheet(
   var activeTimePickerTarget by rememberSaveable { mutableStateOf<String?>(null) }
 
   val selectedProfile = profiles.firstOrNull { it.id == selectedProfileId } ?: profiles.firstOrNull()
-  val activeAccent = selectedProfile?.mode?.tonalAccentColor() ?: MaterialTheme.colorScheme.primary
+  val activeAccent = selectedProfile?.resolvedAudioMode?.tonalAccentColor() ?: MaterialTheme.colorScheme.primary
 
   fun buildRule(): ScheduleRule {
     val resolvedName = name.trim().ifEmpty {

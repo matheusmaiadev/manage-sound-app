@@ -9,12 +9,14 @@ import com.managesoundmode.app.data.system.SoundSystemController
 import com.managesoundmode.app.domain.model.AccessControlConfig
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SavedStateSnapshot
 import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
@@ -416,16 +418,31 @@ class MainScreenViewModelTest {
       assertEquals("Modos de Som", AppLabels.Tabs.nowTopBarTitle)
       assertEquals("Agora", AppLabels.Tabs.nowLabel)
       assertEquals("Som Ativo", SoundMode.NORMAL.title)
+      assertEquals("Som + Vibrar", SoundState(BaseAudioMode.SOUND, true).title)
+      assertEquals("Som (Sem Vibrar)", SoundState(BaseAudioMode.SOUND, false).title)
+      assertEquals("Silêncio + Vibrar", SoundState(BaseAudioMode.SILENT, true).title)
+      assertEquals("Silêncio Total", SoundState(BaseAudioMode.SILENT, false).title)
       assertEquals("Toque (Ring)", VolumeStreamType.RING.label)
 
       AppLabels.currentLanguage = AppLanguage.EN
       assertEquals("Sound Modes", AppLabels.Tabs.nowTopBarTitle)
       assertEquals("Now", AppLabels.Tabs.nowLabel)
       assertEquals("Active Sound", SoundMode.NORMAL.title)
+      assertEquals("Sound + Vibrate", SoundState(BaseAudioMode.SOUND, true).title)
+      assertEquals("Sound (No Vibrate)", SoundState(BaseAudioMode.SOUND, false).title)
+      assertEquals("Silent + Vibrate", SoundState(BaseAudioMode.SILENT, true).title)
+      assertEquals("Total Silence", SoundState(BaseAudioMode.SILENT, false).title)
       assertEquals("Ring", VolumeStreamType.RING.label)
       assertEquals("Locations", AppLabels.Tabs.locationsLabel)
 
       assertEquals("tab_now", AppTestTags.Tabs.NOW)
+      assertEquals("audio_mode_sound_button", AppTestTags.Now.AUDIO_MODE_SOUND_BUTTON)
+      assertEquals("audio_mode_silent_button", AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON)
+      assertEquals("vibrate_toggle_button", AppTestTags.Now.VIBRATE_TOGGLE_BUTTON)
+      assertEquals("write_settings_banner", AppTestTags.Now.WRITE_SETTINGS_BANNER)
+      assertEquals("editor_audio_sound_button", AppTestTags.Profiles.EDITOR_AUDIO_SOUND_BUTTON)
+      assertEquals("editor_audio_silent_button", AppTestTags.Profiles.EDITOR_AUDIO_SILENT_BUTTON)
+      assertEquals("editor_vibrate_toggle", AppTestTags.Profiles.EDITOR_VIBRATE_TOGGLE)
       assertEquals("mode_button_VIBRATE", AppTestTags.Now.modeButton(SoundMode.VIBRATE))
       assertEquals("profile_card_preset_sleep", AppTestTags.Profiles.card("preset_sleep"))
       assertEquals("schedule_switch_sched_work", AppTestTags.Schedules.switch("sched_work"))
@@ -587,6 +604,7 @@ class MainScreenViewModelTest {
 
   @Test
   fun timerSession_startExtendAndCancel_restoresPreviousModeAndVolumes() = runTest {
+    fakePreferences.clearSchedules()
     backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
       viewModel.uiState.collect()
     }
@@ -612,6 +630,7 @@ class MainScreenViewModelTest {
 
   @Test
   fun allSettingsPreferences_locationCrud_andQuickTileCycle_updateCorrectly() = runTest {
+    fakePreferences.clearSchedules()
     backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
       viewModel.uiState.collect()
     }
@@ -837,13 +856,153 @@ class MainScreenViewModelTest {
     assertEquals(true, afterInstantWifiConfirm.locationRules.first { it.id == "loc_college" }.isCurrentlyInside)
     assertEquals(SoundMode.VIBRATE, afterInstantWifiConfirm.currentMode)
   }
+
+  @Test
+  fun uc33_toggleVibrateInSoundMode_preservesSoundDoesNotMuteMediaAndPromptsWriteSettingsJustInTime() = runTest {
+    fakePreferences.clearSchedules()
+    fakeSystemController.canWriteSettings = false
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    viewModel.onStreamVolumeChange(VolumeStreamType.MEDIA, 65)
+    val initial = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(BaseAudioMode.SOUND, initial.audioMode)
+    assertEquals(true, initial.vibrateEnabled)
+    assertEquals(65, initial.streams.mediaPercent)
+    assertEquals(false, initial.showWriteSettingsPrompt)
+
+    // Alternar Vibrar em Som com canWriteSettings = false:
+    // Mantém SOUND, alterna vibrateEnabled -> false, NÃO zera mídia, NÃO abre timer e solicita WRITE_SETTINGS Just-in-Time
+    viewModel.onToggleVibrate()
+    val afterToggleOff = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(BaseAudioMode.SOUND, afterToggleOff.audioMode)
+    assertEquals(false, afterToggleOff.vibrateEnabled)
+    assertEquals(65, afterToggleOff.streams.mediaPercent)
+    assertNull(afterToggleOff.activeTimer)
+    assertEquals(true, afterToggleOff.showWriteSettingsPrompt)
+    assertEquals(AppLabels.Now.writeSettingsPromptMessage, afterToggleOff.statusMessage)
+
+    viewModel.onDismissWriteSettingsPrompt()
+    assertEquals(false, (viewModel.uiState.value as MainScreenUiState.Ready).showWriteSettingsPrompt)
+
+    // Concede WRITE_SETTINGS: sincroniza imediatamente e alterna sem banner
+    fakeSystemController.canWriteSettings = true
+    viewModel.onRefreshSystemState()
+    assertEquals(false, fakeSystemController.vibrateWhenRingingSetting)
+
+    viewModel.onToggleVibrate()
+    val afterToggleOn = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(BaseAudioMode.SOUND, afterToggleOn.audioMode)
+    assertEquals(true, afterToggleOn.vibrateEnabled)
+    assertEquals(true, fakeSystemController.vibrateWhenRingingSetting)
+    assertEquals(false, afterToggleOn.showWriteSettingsPrompt)
+  }
+
+  @Test
+  fun uc34_toggleVibrateInSilentMode_andSwitchAudioModePreservingTactilePreference() = runTest {
+    fakePreferences.clearSchedules()
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    viewModel.onStreamVolumeChange(VolumeStreamType.MEDIA, 60)
+    viewModel.onSetVibrateEnabled(false)
+    val soundNoVib = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundState(BaseAudioMode.SOUND, false), soundNoVib.currentSoundState)
+    assertEquals(60, soundNoVib.streams.mediaPercent)
+
+    // Trocar de Som -> Silêncio preservando vibrateEnabled = false (Silêncio Total / DND) e zerando mídia
+    viewModel.onSelectAudioMode(BaseAudioMode.SILENT)
+    val silentNoVib = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundState(BaseAudioMode.SILENT, false), silentNoVib.currentSoundState)
+    assertEquals(SoundMode.SILENT, silentNoVib.currentMode)
+    assertEquals(0, silentNoVib.streams.mediaPercent)
+
+    // Alternar Vibrar dentro de Silêncio -> Silêncio + Vibrar (RINGER_MODE_VIBRATE)
+    viewModel.onToggleVibrate()
+    val silentVib = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), silentVib.currentSoundState)
+    assertEquals(SoundMode.VIBRATE, silentVib.currentMode)
+
+    // Sem permissão DND, tentar desligar Vibrar dentro de Silêncio bloqueia e mantém Silêncio + Vibrar
+    fakeSystemController.dndGranted = false
+    viewModel.onToggleVibrate()
+    val blockedDnd = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), blockedDnd.currentSoundState)
+    assertTrue(blockedDnd.statusMessage?.contains("Não Perturbe") == true)
+    fakeSystemController.dndGranted = true
+
+    // Voltar para Som preserva vibrateEnabled = true e restaura mídia de 60%
+    viewModel.onSelectAudioMode(BaseAudioMode.SOUND)
+    val backToSoundVib = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(SoundState(BaseAudioMode.SOUND, true), backToSoundVib.currentSoundState)
+    assertEquals(60, backToSoundVib.streams.mediaPercent)
+  }
+
+  @Test
+  fun uc35_v1BackupJsonMigration_normalizesLegacyProfilesInto2x2Matrix() = runTest {
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    val legacyV1Json = """
+      {
+        "version": 1,
+        "customProfiles": [
+          {
+            "id": "legacy_normal",
+            "name": "Legado Normal",
+            "description": "v1",
+            "mode": "NORMAL",
+            "streams": {"ringPercent": 80, "notificationPercent": 70, "mediaPercent": 50, "alarmPercent": 90},
+            "isPreset": false
+          },
+          {
+            "id": "legacy_vibrate",
+            "name": "Legado Vibrar",
+            "description": "v1",
+            "mode": "VIBRATE",
+            "streams": {"ringPercent": 0, "notificationPercent": 0, "mediaPercent": 0, "alarmPercent": 85},
+            "isPreset": false
+          },
+          {
+            "id": "legacy_silent",
+            "name": "Legado Silêncio",
+            "description": "v1",
+            "mode": "SILENT",
+            "streams": {"ringPercent": 0, "notificationPercent": 0, "mediaPercent": 0, "alarmPercent": 100},
+            "isPreset": false
+          }
+        ]
+      }
+    """.trimIndent()
+
+    viewModel.onImportBackupJson(legacyV1Json)
+    val ready = viewModel.uiState.value as MainScreenUiState.Ready
+
+    val pNormal = ready.profiles.first { it.id == "legacy_normal" }
+    val pVibrate = ready.profiles.first { it.id == "legacy_vibrate" }
+    val pSilent = ready.profiles.first { it.id == "legacy_silent" }
+
+    assertEquals(SoundState(BaseAudioMode.SOUND, true), pNormal.resolvedSoundState)
+    assertEquals(SoundState(BaseAudioMode.SILENT, true), pVibrate.resolvedSoundState)
+    assertEquals(SoundState(BaseAudioMode.SILENT, false), pSilent.resolvedSoundState)
+  }
 }
 
 private class FakeSoundSystemController : SoundSystemController {
   private val changes = MutableStateFlow(Unit)
-  var mode: SoundMode = SoundMode.NORMAL
+  var soundState: SoundState = SoundState.DEFAULT
+  var mode: SoundMode
+    get() = soundState.toLegacyApproximation()
+    set(value) {
+      soundState = SoundState.fromLegacyMode(value)
+    }
   var streams: VolumeStreams = VolumeStreams()
   var dndGranted: Boolean = true
+  var canWriteSettings: Boolean = true
+  var vibrateWhenRingingSetting: Boolean = true
   var externalFlag: Boolean = false
 
   override val systemChanges: Flow<Unit> = changes
@@ -854,18 +1013,39 @@ private class FakeSoundSystemController : SoundSystemController {
     externalFlag = false
   }
 
-  override fun readCurrentMode(): SoundMode = mode
+  override fun readCurrentMode(): SoundMode = soundState.toLegacyApproximation()
+
+  override fun readSoundState(): SoundState = soundState
 
   override fun readVolumeStreams(): VolumeStreams = streams
 
   override fun hasDndPermission(): Boolean = dndGranted
 
-  override fun applySoundMode(mode: SoundMode): Result<SoundMode> = runCatching {
-    if (mode == SoundMode.SILENT && !dndGranted) {
+  override fun canWriteSystemSettings(): Boolean = canWriteSettings
+
+  override fun syncFallbackSoundVibrate(enabled: Boolean) {
+    if (soundState.audioMode == BaseAudioMode.SOUND) {
+      soundState = soundState.copy(vibrateEnabled = enabled)
+      if (canWriteSettings) {
+        vibrateWhenRingingSetting = enabled
+      }
+    }
+  }
+
+  override fun applySoundMode(mode: SoundMode): Result<SoundMode> =
+    applySoundState(SoundState.fromLegacyMode(mode)).map { it.toLegacyApproximation() }
+
+  override fun applySoundState(state: SoundState): Result<SoundState> = runCatching {
+    val targetNeedsDnd = state.audioMode == BaseAudioMode.SILENT && !state.vibrateEnabled
+    val currentlyNeedsDnd = soundState.audioMode == BaseAudioMode.SILENT && !soundState.vibrateEnabled
+    if ((targetNeedsDnd || currentlyNeedsDnd) && !dndGranted) {
       throw DndPermissionRequiredException()
     }
-    this.mode = mode
-    this.mode
+    soundState = state
+    if (state.audioMode == BaseAudioMode.SOUND && canWriteSettings) {
+      vibrateWhenRingingSetting = state.vibrateEnabled
+    }
+    soundState
   }
 
   override fun applyStreamVolume(type: VolumeStreamType, percent: Int): Result<VolumeStreams> = runCatching {
@@ -1039,6 +1219,10 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
     state.value = state.value.copy(systemZenRulesEnabled = enabled)
   }
 
+  override suspend fun setSoundVibrateEnabledFallback(enabled: Boolean) {
+    state.value = state.value.copy(soundVibrateEnabledFallback = enabled)
+  }
+
   override suspend fun resetFactoryDefaults() {
     state.value = PersistedSoundPrefs(
       themeMode = state.value.themeMode,
@@ -1049,8 +1233,8 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
   override suspend fun exportBackupJson(): String {
     val current = state.value
     val payload = SoundPrefsBackupPayload(
-      version = 1,
-      customProfiles = current.customProfiles,
+      version = 2,
+      customProfiles = current.customProfiles.map { it.normalized() },
       deletedProfileIds = current.deletedProfileIds,
       scheduleRules = current.scheduleRules,
       locationRules = current.locationRules,
@@ -1071,6 +1255,7 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       quickTileSlot2ProfileId = current.quickTileSlot2ProfileId,
       accessControlConfig = current.accessControlConfig,
       systemZenRulesEnabled = current.systemZenRulesEnabled,
+      soundVibrateEnabledFallback = current.soundVibrateEnabledFallback,
     )
     return Json.encodeToString(payload)
   }
@@ -1079,7 +1264,7 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
     val json = Json { ignoreUnknownKeys = true }
     val payload = json.decodeFromString<SoundPrefsBackupPayload>(rawJson.trim())
     state.value = state.value.copy(
-      customProfiles = payload.customProfiles,
+      customProfiles = payload.customProfiles.map { it.normalized() },
       deletedProfileIds = payload.deletedProfileIds,
       scheduleRules = payload.scheduleRules,
       locationRules = payload.locationRules,
@@ -1100,6 +1285,7 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       quickTileSlot2ProfileId = payload.quickTileSlot2ProfileId,
       accessControlConfig = payload.accessControlConfig,
       systemZenRulesEnabled = payload.systemZenRulesEnabled,
+      soundVibrateEnabledFallback = payload.soundVibrateEnabledFallback,
     )
   }
 }

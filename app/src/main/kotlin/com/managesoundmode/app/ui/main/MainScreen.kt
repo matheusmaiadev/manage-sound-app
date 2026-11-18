@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
@@ -62,6 +64,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -118,11 +121,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
+import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
+import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.VolumeStreamType
@@ -137,7 +142,8 @@ import com.managesoundmode.app.ui.components.FirstRunOnboardingDialog
 import com.managesoundmode.app.ui.components.PillVolumeSliderRow
 import com.managesoundmode.app.ui.components.ProfileEditorBottomSheet
 import com.managesoundmode.app.ui.components.ProminentLocationDisclosureDialog
-import com.managesoundmode.app.ui.components.modeIcon
+import com.managesoundmode.app.ui.components.ZenithSplitModeAndVibrateRow
+import com.managesoundmode.app.ui.components.audioModeIcon
 import com.managesoundmode.app.ui.components.profileIconForKey
 import com.managesoundmode.app.ui.theme.LocalZenithIsDark
 import com.managesoundmode.app.ui.theme.ManageSoundModeTheme
@@ -146,6 +152,9 @@ import com.managesoundmode.app.ui.theme.onTonalContainerColor
 import com.managesoundmode.app.ui.theme.orbGlowColor
 import com.managesoundmode.app.ui.theme.tonalAccentColor
 import com.managesoundmode.app.ui.theme.tonalContainerColor
+import com.managesoundmode.app.ui.theme.zenithOnActivePillColor
+import com.managesoundmode.app.ui.theme.zenithVibrateAccentColor
+import com.managesoundmode.app.ui.theme.zenithVibrateContainerColor
 import com.managesoundmode.app.widget.SoundModeGlanceWidget
 
 enum class MainAppTab(
@@ -245,9 +254,12 @@ fun MainScreen(
         MainDashboardContent(
           state = state,
           onSelectMode = viewModel::onSelectMode,
+          onSelectAudioMode = viewModel::onSelectAudioMode,
+          onToggleVibrate = viewModel::onToggleVibrate,
           onStreamVolumeChange = viewModel::onStreamVolumeChange,
           onActivateProfile = viewModel::onActivateProfile,
           onStartTimer = viewModel::onStartTimer,
+          onStartStateTimer = viewModel::onStartStateTimer,
           onExtendTimer = viewModel::onExtendTimer,
           onCancelTimer = viewModel::onCancelTimer,
           onSaveProfile = viewModel::onSaveCurrentAsProfile,
@@ -263,7 +275,19 @@ fun MainScreen(
               addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             runCatching { context.startActivity(intent) }
+              .onFailure { Log.w("MainScreen", "Falha ao abrir configurações de DND", it) }
           },
+          onRequestWriteSettingsPermission = {
+            val intent = Intent(
+              Settings.ACTION_MANAGE_WRITE_SETTINGS,
+              Uri.parse("package:${context.packageName}"),
+            ).apply {
+              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(intent) }
+              .onFailure { Log.w("MainScreen", "Falha ao abrir configurações WRITE_SETTINGS", it) }
+          },
+          onDismissWriteSettingsPrompt = viewModel::onDismissWriteSettingsPrompt,
           onRequestExactAlarmPermission = {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
               val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
@@ -405,6 +429,19 @@ internal fun MainDashboardContent(
   onSaveProfile: (String, String) -> Unit,
   onDismissMessage: () -> Unit,
   onRequestDndPermission: () -> Unit,
+  onSelectAudioMode: (BaseAudioMode) -> Unit = { targetAudio ->
+    val nextState = SoundState(audioMode = targetAudio, vibrateEnabled = state.vibrateEnabled)
+    onSelectMode(nextState.toLegacyApproximation())
+  },
+  onToggleVibrate: () -> Unit = {
+    val nextState = SoundState(audioMode = state.audioMode, vibrateEnabled = !state.vibrateEnabled)
+    onSelectMode(nextState.toLegacyApproximation())
+  },
+  onStartStateTimer: (SoundState, Int) -> Unit = { targetState, mins ->
+    onStartTimer(targetState.toLegacyApproximation(), mins)
+  },
+  onRequestWriteSettingsPermission: () -> Unit = {},
+  onDismissWriteSettingsPrompt: () -> Unit = {},
   onExtendTimer: (Int) -> Unit = {},
   onUpsertProfile: (SoundProfile, Boolean) -> Unit = { profile, _ ->
     onSaveProfile(profile.name, profile.description)
@@ -477,7 +514,7 @@ internal fun MainDashboardContent(
   var pendingLocationPermissionAfterDisclosure by rememberSaveable { mutableStateOf(false) }
 
   val isDark = LocalZenithIsDark.current
-  val modeAccent = state.currentMode.tonalAccentColor()
+  val modeAccent = state.audioMode.tonalAccentColor()
 
   val openAccessControlOrChallenge: () -> Unit = {
     if (state.accessControlConfig.isPinRequired && state.accessControlConfig.activeRole != AppAccessRole.ADMIN) {
@@ -507,6 +544,7 @@ internal fun MainDashboardContent(
     ProfileEditorBottomSheet(
       initialProfile = editingProfile,
       defaultMode = state.currentMode,
+      defaultSoundState = state.currentSoundState,
       defaultStreams = state.streams,
       onSaveProfile = { profile, applyNow ->
         showProfileBottomSheet = false
@@ -714,6 +752,7 @@ internal fun MainDashboardContent(
           onTestSmartNotification = onTestSmartNotification,
           onPinHomeWidget = onPinHomeWidget,
           onRequestDndPermission = onRequestDndPermission,
+          onRequestWriteSettingsPermission = onRequestWriteSettingsPermission,
           onRequestExactAlarmPermission = onRequestExactAlarmPermission,
           onRequestNotificationPermission = onRequestNotificationPermission,
           onClearLogs = onClearLogs,
@@ -761,6 +800,7 @@ internal fun MainDashboardContent(
       onSetQuickTileSlotProfileId = onSetQuickTileSlotProfileId,
       onPinHomeWidget = onPinHomeWidget,
       onRequestDndPermission = onRequestDndPermission,
+      onRequestWriteSettingsPermission = onRequestWriteSettingsPermission,
       onRequestExactAlarmPermission = onRequestExactAlarmPermission,
       onRequestNotificationPermission = onRequestNotificationPermission,
       onClearLogs = onClearLogs,
@@ -1129,13 +1169,16 @@ internal fun MainDashboardContent(
       MainAppTab.NOW -> {
         NowTabContent(
           state = state,
-          onSelectMode = onSelectMode,
+          onSelectAudioMode = onSelectAudioMode,
+          onToggleVibrate = onToggleVibrate,
           onStreamVolumeChange = onStreamVolumeChange,
           onOpenProfilesTab = { selectedTab = MainAppTab.PROFILES },
-          onStartTimer = onStartTimer,
+          onStartStateTimer = onStartStateTimer,
           onExtendTimer = onExtendTimer,
           onCancelTimer = onCancelTimer,
           onRequestDndPermission = onRequestDndPermission,
+          onRequestWriteSettingsPermission = onRequestWriteSettingsPermission,
+          onDismissWriteSettingsPrompt = onDismissWriteSettingsPrompt,
           onReapplyActiveRule = onReapplyActiveRule,
           modifier = Modifier.padding(innerPadding),
         )
@@ -1308,13 +1351,16 @@ private fun ZenithFloatingPillNavigationBar(
 @Composable
 private fun NowTabContent(
   state: MainScreenUiState.Ready,
-  onSelectMode: (SoundMode) -> Unit,
+  onSelectAudioMode: (BaseAudioMode) -> Unit,
+  onToggleVibrate: () -> Unit,
   onStreamVolumeChange: (VolumeStreamType, Int) -> Unit,
   onOpenProfilesTab: () -> Unit,
-  onStartTimer: (SoundMode, Int) -> Unit,
+  onStartStateTimer: (SoundState, Int) -> Unit,
   onExtendTimer: (Int) -> Unit,
   onCancelTimer: () -> Unit,
   onRequestDndPermission: () -> Unit,
+  onRequestWriteSettingsPermission: () -> Unit,
+  onDismissWriteSettingsPrompt: () -> Unit,
   onReapplyActiveRule: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -1334,30 +1380,47 @@ private fun NowTabContent(
       }
     }
 
+    if (state.showWriteSettingsPrompt && !state.canWriteSystemSettings) {
+      item {
+        WriteSettingsPermissionBanner(
+          onRequestWriteSettingsPermission = onRequestWriteSettingsPermission,
+          onDismiss = onDismissWriteSettingsPrompt,
+        )
+      }
+    }
+
     if (state.isManuallyOverridden) {
       item {
         ManualOverrideBanner(onReapplyActiveRule = onReapplyActiveRule)
       }
     }
 
-    // Bloco 1: Orbe Acústico ZENITH + Pílula Tripla de Modo + Timer Embutido
+    // Bloco 1: Orbe Acústico ZENITH + Split Capsule 2+1 ([Som | Silêncio] + [Vibrar]) + Timer Contextual
     item {
       UnifiedHeroAndModeCard(
-        currentMode = state.currentMode,
+        soundState = state.currentSoundState,
         mediaPercent = state.streams.mediaPercent,
         activeProfile = activeProfile,
         activeTimer = state.activeTimer,
         activeRuleTitle = state.activeRuleTitle,
         activeRuleSubtitle = state.activeRuleSubtitle,
-        onSelectMode = { mode ->
+        onSelectAudioMode = { audioMode ->
           haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-          onSelectMode(mode)
+          onSelectAudioMode(audioMode)
+        },
+        onToggleVibrate = {
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          onToggleVibrate()
         },
         onOpenProfilesTab = onOpenProfilesTab,
         onStartTimer = { minutes ->
           haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-          val targetMode = if (state.currentMode == SoundMode.NORMAL) SoundMode.VIBRATE else state.currentMode
-          onStartTimer(targetMode, minutes)
+          val targetState = if (state.audioMode == BaseAudioMode.SOUND) {
+            SoundState(audioMode = BaseAudioMode.SILENT, vibrateEnabled = state.vibrateEnabled)
+          } else {
+            state.currentSoundState
+          }
+          onStartStateTimer(targetState, minutes)
         },
         onExtendTimer = { addMinutes ->
           haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1374,7 +1437,7 @@ private fun NowTabContent(
     item {
       VolumeStreamsCard(
         streams = state.streams,
-        currentMode = state.currentMode,
+        audioMode = state.audioMode,
         onStreamVolumeChange = onStreamVolumeChange,
       )
     }
@@ -1382,45 +1445,48 @@ private fun NowTabContent(
 }
 
 /**
- * Orbe Acústico Respirante ZENITH (`ZenithOrbHeroCard`) + Seletor Triplo Flutuante + Gaveta de Timer.
+ * Orbe Acústico Respirante ZENITH (`ZenithOrbHeroCard`) + Split Capsule `2 + 1` + Gaveta de Timer.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UnifiedHeroAndModeCard(
-  currentMode: SoundMode,
+  soundState: SoundState,
   mediaPercent: Int,
   activeProfile: SoundProfile?,
   activeTimer: TimedModeSession?,
   activeRuleTitle: String?,
   activeRuleSubtitle: String?,
-  onSelectMode: (SoundMode) -> Unit,
+  onSelectAudioMode: (BaseAudioMode) -> Unit,
+  onToggleVibrate: () -> Unit,
   onOpenProfilesTab: () -> Unit,
   onStartTimer: (Int) -> Unit,
   onExtendTimer: (Int) -> Unit,
   onCancelTimer: () -> Unit,
 ) {
   val animatedAccent by animateColorAsState(
-    targetValue = currentMode.tonalAccentColor(),
+    targetValue = soundState.audioMode.tonalAccentColor(),
     animationSpec = tween(durationMillis = 280),
     label = "zenithHeroAccent",
   )
   val animatedContainer by animateColorAsState(
-    targetValue = currentMode.tonalContainerColor(),
+    targetValue = soundState.audioMode.tonalContainerColor(),
     animationSpec = tween(durationMillis = 280),
     label = "zenithHeroContainer",
   )
   val animatedOnContainer by animateColorAsState(
-    targetValue = currentMode.onTonalContainerColor(),
+    targetValue = soundState.audioMode.onTonalContainerColor(),
     animationSpec = tween(durationMillis = 280),
     label = "zenithHeroOnContainer",
   )
   val animatedGlow by animateColorAsState(
-    targetValue = currentMode.orbGlowColor(),
+    targetValue = soundState.audioMode.orbGlowColor(),
     animationSpec = tween(durationMillis = 280),
     label = "zenithHeroGlow",
   )
+  val vibrateAccent = zenithVibrateAccentColor()
+  val vibrateContainer = zenithVibrateContainerColor()
 
-  val showContextualTimerRow = currentMode != SoundMode.NORMAL || activeTimer != null
+  val showContextualTimerRow = soundState.audioMode == BaseAudioMode.SILENT || activeTimer != null
 
   Card(
     modifier = Modifier
@@ -1514,7 +1580,7 @@ private fun UnifiedHeroAndModeCard(
         }
       }
 
-      // Centro Gravitacional: Orbe Acústico ZENITH + Anéis Concêntricos
+      // Centro Gravitacional: Orbe Acústico ZENITH + Anel Tracejado Âmbar & Badge Satélite de Vibração
       Box(
         modifier = Modifier
           .fillMaxWidth()
@@ -1540,13 +1606,18 @@ private fun UnifiedHeroAndModeCard(
             center = center,
           )
 
-          // Anel acústico externo tracejado
+          // Anel acústico externo tracejado (Solar Amber quando vibrateEnabled == true)
+          val outerRingColor = if (soundState.vibrateEnabled) {
+            vibrateAccent.copy(alpha = 0.55f)
+          } else {
+            animatedAccent.copy(alpha = 0.22f)
+          }
           drawCircle(
-            color = animatedAccent.copy(alpha = 0.22f),
+            color = outerRingColor,
             radius = maxR * 0.90f,
             center = center,
             style = Stroke(
-              width = 1.2.dp.toPx(),
+              width = if (soundState.vibrateEnabled) 1.6.dp.toPx() else 1.2.dp.toPx(),
               pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
             ),
           )
@@ -1581,34 +1652,63 @@ private fun UnifiedHeroAndModeCard(
           )
         }
 
-        // Ícone central dentro do Orbe (tocar alterna para o próximo modo)
+        // Ícone central único do eixo de áudio + mini-badge satélite vetorial quando vibrateEnabled == true
         Box(
-          modifier = Modifier
-            .size(78.dp)
-            .clip(CircleShape)
-            .clickable {
-              val modes = SoundMode.entries
-              val nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.size]
-              onSelectMode(nextMode)
-            },
+          modifier = Modifier.size(84.dp),
           contentAlignment = Alignment.Center,
         ) {
-          Icon(
-            imageVector = currentMode.modeIcon(),
-            contentDescription = null,
-            tint = animatedOnContainer,
-            modifier = Modifier.size(34.dp),
-          )
+          Box(
+            modifier = Modifier
+              .size(78.dp)
+              .clip(CircleShape)
+              .clickable {
+                val nextAudio = if (soundState.audioMode == BaseAudioMode.SOUND) {
+                  BaseAudioMode.SILENT
+                } else {
+                  BaseAudioMode.SOUND
+                }
+                onSelectAudioMode(nextAudio)
+              },
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = soundState.audioMode.audioModeIcon(),
+              contentDescription = null,
+              tint = animatedOnContainer,
+              modifier = Modifier.size(34.dp),
+            )
+          }
+
+          if (soundState.vibrateEnabled) {
+            Surface(
+              shape = CircleShape,
+              color = vibrateContainer,
+              border = BorderStroke(1.dp, vibrateAccent.copy(alpha = 0.70f)),
+              modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .size(24.dp)
+                .testTag(AppTestTags.Now.ORB_VIBRATE_BADGE),
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.Vibration,
+                  contentDescription = null,
+                  tint = vibrateAccent,
+                  modifier = Modifier.size(13.dp),
+                )
+              }
+            }
+          }
         }
       }
 
-      // Tipografia Central do Estado Acústico
+      // Tipografia Central do Estado Acústico (4 estados combinados)
       Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
       ) {
         Text(
-          text = currentMode.title,
+          text = soundState.title,
           style = MaterialTheme.typography.headlineSmall,
           fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.onSurface,
@@ -1617,10 +1717,10 @@ private fun UnifiedHeroAndModeCard(
           overflow = TextOverflow.Ellipsis,
         )
         val cleanSubtitle = when {
-          currentMode != SoundMode.NORMAL ->
-            AppLabels.Now.modeWithMediaSubtitle(currentMode.subtitle, mediaPercent)
+          soundState.audioMode == BaseAudioMode.SILENT ->
+            AppLabels.Now.modeWithMediaSubtitle(soundState.subtitle, mediaPercent)
           activeRuleSubtitle != null -> activeRuleSubtitle
-          else -> currentMode.subtitle
+          else -> soundState.subtitle
         }
         Text(
           text = cleanSubtitle,
@@ -1632,80 +1732,16 @@ private fun UnifiedHeroAndModeCard(
         )
       }
 
-      // Pílula Tripla Flutuante dos 3 Modos (Som | Vibrar | Silêncio)
-      Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(5.dp),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          SoundMode.entries.forEach { mode ->
-            val selected = mode == currentMode
-            val modeAccent = mode.tonalAccentColor()
-            val chipBg by animateColorAsState(
-              targetValue = if (selected) {
-                modeAccent
-              } else {
-                Color.Transparent
-              },
-              animationSpec = tween(180),
-              label = "zenithModePillBg_${mode.name}",
-            )
-            val chipContent by animateColorAsState(
-              targetValue = if (selected) {
-                mode.onActivePillColor()
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-              animationSpec = tween(180),
-              label = "zenithModePillContent_${mode.name}",
-            )
-
-            Surface(
-              modifier = Modifier
-                .weight(1f)
-                .heightIn(min = 44.dp)
-                .clip(RoundedCornerShape(19.dp))
-                .clickable { onSelectMode(mode) }
-                .semantics { contentDescription = AppLabels.Now.modeContentDescription(mode) }
-                .testTag(AppTestTags.Now.modeButton(mode)),
-              shape = RoundedCornerShape(19.dp),
-              color = chipBg,
-            ) {
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(horizontal = 6.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Icon(
-                  imageVector = mode.modeIcon(),
-                  contentDescription = null,
-                  tint = chipContent,
-                  modifier = Modifier.size(17.dp),
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                  text = AppLabels.Now.modeShortPill(mode),
-                  style = MaterialTheme.typography.labelLarge,
-                  fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                  color = chipContent,
-                  maxLines = 1,
-                  softWrap = false,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
-            }
-          }
-        }
-      }
+      // Split Capsule `2 + 1`: [Som | Silêncio] + [Vibrar] independente
+      ZenithSplitModeAndVibrateRow(
+        audioMode = soundState.audioMode,
+        vibrateEnabled = soundState.vibrateEnabled,
+        onSelectAudioMode = onSelectAudioMode,
+        onToggleVibrate = onToggleVibrate,
+        soundButtonTag = AppTestTags.Now.AUDIO_MODE_SOUND_BUTTON,
+        silentButtonTag = AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON,
+        vibrateButtonTag = AppTestTags.Now.VIBRATE_TOGGLE_BUTTON,
+      )
 
       // Gaveta Contextual de Timer: SÓ aparece em Vibrar ou Silencioso (ou quando há timer ativo)
       AnimatedVisibility(
@@ -1929,12 +1965,91 @@ private fun DndPermissionBanner(
 }
 
 @Composable
+private fun WriteSettingsPermissionBanner(
+  onRequestWriteSettingsPermission: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val vibrateAccent = zenithVibrateAccentColor()
+  val vibrateContainer = zenithVibrateContainerColor()
+
+  Card(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag(AppTestTags.Now.WRITE_SETTINGS_BANNER),
+    shape = RoundedCornerShape(24.dp),
+    border = BorderStroke(1.dp, vibrateAccent.copy(alpha = 0.45f)),
+    colors = CardDefaults.cardColors(
+      containerColor = vibrateContainer,
+    ),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 14.dp, vertical = 12.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        modifier = Modifier.weight(1f),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Vibration,
+          contentDescription = null,
+          tint = vibrateAccent,
+        )
+        Column {
+          Text(
+            text = AppLabels.Now.writeSettingsBannerTitle,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = AppLabels.Now.writeSettingsBannerSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+      Spacer(modifier = Modifier.width(8.dp))
+      Button(
+        onClick = onRequestWriteSettingsPermission,
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = vibrateAccent,
+          contentColor = zenithOnActivePillColor(),
+        ),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        modifier = Modifier.testTag(AppTestTags.Now.WRITE_SETTINGS_ENABLE_BUTTON),
+      ) {
+        Text(AppLabels.Common.authorize, fontWeight = FontWeight.Bold)
+      }
+      IconButton(
+        onClick = onDismiss,
+        modifier = Modifier
+          .size(32.dp)
+          .testTag(AppTestTags.Now.WRITE_SETTINGS_DISMISS_BUTTON),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Close,
+          contentDescription = AppLabels.Common.cancel,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(18.dp),
+        )
+      }
+    }
+  }
+}
+
+@Composable
 private fun VolumeStreamsCard(
   streams: VolumeStreams,
-  currentMode: SoundMode,
+  audioMode: BaseAudioMode,
   onStreamVolumeChange: (VolumeStreamType, Int) -> Unit,
 ) {
-  val activeAccent = currentMode.tonalAccentColor()
+  val activeAccent = audioMode.tonalAccentColor()
 
   Card(
     modifier = Modifier.fillMaxWidth(),
@@ -1965,7 +2080,7 @@ private fun VolumeStreamsCard(
           color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
           Text(
-            text = "4 CANAIS",
+            text = AppLabels.Now.fourChannelsBadge,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

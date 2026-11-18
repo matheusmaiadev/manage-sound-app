@@ -151,6 +151,7 @@ internal fun SettingsAndProfilesTabContent(
   onRequestExactAlarmPermission: () -> Unit,
   onRequestNotificationPermission: () -> Unit,
   onClearLogs: () -> Unit,
+  onRequestWriteSettingsPermission: () -> Unit = {},
   onSetPersistentQuickBarEnabled: (Boolean) -> Unit = {},
   onRequestAddQuickTile: (QuickTileKind, String?) -> Unit = { _, _ -> },
   onSetQuickTileSlotProfileId: (Int, String) -> Unit = { _, _ -> },
@@ -245,6 +246,7 @@ internal fun SettingsAndProfilesTabContent(
       onSetQuickTileSlotProfileId = onSetQuickTileSlotProfileId,
       onPinHomeWidget = onPinHomeWidget,
       onRequestDndPermission = onRequestDndPermission,
+      onRequestWriteSettingsPermission = onRequestWriteSettingsPermission,
       onRequestExactAlarmPermission = onRequestExactAlarmPermission,
       onRequestNotificationPermission = onRequestNotificationPermission,
       onClearLogs = onClearLogs,
@@ -686,6 +688,7 @@ internal fun SettingsCategoryFullScreenDialog(
   onSetQuickTileSlotProfileId: (Int, String) -> Unit = { _, _ -> },
   onPinHomeWidget: () -> Unit = {},
   onRequestDndPermission: () -> Unit = {},
+  onRequestWriteSettingsPermission: () -> Unit = {},
   onRequestExactAlarmPermission: () -> Unit = {},
   onRequestNotificationPermission: () -> Unit = {},
   onClearLogs: () -> Unit = {},
@@ -815,6 +818,7 @@ internal fun SettingsCategoryFullScreenDialog(
           PermissionsDiagnosticSubScreen(
             state = state,
             onRequestDndPermission = onRequestDndPermission,
+            onRequestWriteSettingsPermission = onRequestWriteSettingsPermission,
             onRequestNotificationPermission = onRequestNotificationPermission,
             onRequestExactAlarmPermission = onRequestExactAlarmPermission,
             onRequestLocationPermission = onRequestLocationPermission,
@@ -2150,6 +2154,7 @@ private fun PermissionsDiagnosticSubScreen(
   onRequestDndPermission: () -> Unit,
   onRequestNotificationPermission: () -> Unit,
   onRequestExactAlarmPermission: () -> Unit,
+  onRequestWriteSettingsPermission: () -> Unit = {},
   onRequestLocationPermission: () -> Unit = {},
   onReopenOnboarding: () -> Unit = {},
   modifier: Modifier = Modifier,
@@ -2169,8 +2174,21 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.pendingTapToAuthorizeStatus
       },
       isHealthy = state.hasDndPermission,
-      shape = groupedCardShape(index = 0, totalCount = 5),
+      shape = groupedCardShape(index = 0, totalCount = 6),
       onClick = onRequestDndPermission,
+    )
+
+    HealthCheckItemCard(
+      title = AppLabels.Settings.writeSettingsPermissionTitle,
+      subtitle = if (state.canWriteSystemSettings) {
+        AppLabels.Settings.writeSettingsPermissionGrantedSubtitle
+      } else {
+        AppLabels.Settings.writeSettingsPermissionPendingSubtitle
+      },
+      isHealthy = state.canWriteSystemSettings,
+      shape = groupedCardShape(index = 1, totalCount = 6),
+      testTag = AppTestTags.Settings.WRITE_SETTINGS_PERMISSION_CARD,
+      onClick = onRequestWriteSettingsPermission,
     )
 
     HealthCheckItemCard(
@@ -2181,7 +2199,7 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.smartNotificationsPendingSubtitle
       },
       isHealthy = state.hasNotificationPermission,
-      shape = groupedCardShape(index = 1, totalCount = 5),
+      shape = groupedCardShape(index = 2, totalCount = 6),
       onClick = onRequestNotificationPermission,
     )
 
@@ -2193,7 +2211,7 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.pendingTapToAuthorizeStatus
       },
       isHealthy = state.canScheduleExactAlarms,
-      shape = groupedCardShape(index = 2, totalCount = 5),
+      shape = groupedCardShape(index = 3, totalCount = 6),
       onClick = onRequestExactAlarmPermission,
     )
 
@@ -2205,7 +2223,7 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.locationPermissionPendingSubtitle
       },
       isHealthy = state.hasLocationPermission,
-      shape = groupedCardShape(index = 3, totalCount = 5),
+      shape = groupedCardShape(index = 4, totalCount = 6),
       onClick = onRequestLocationPermission,
     )
 
@@ -2213,7 +2231,7 @@ private fun PermissionsDiagnosticSubScreen(
       title = AppLabels.Settings.onDeviceStorageTitle,
       subtitle = AppLabels.Settings.onDeviceStorageSubtitle,
       isHealthy = true,
-      shape = groupedCardShape(index = 4, totalCount = 5),
+      shape = groupedCardShape(index = 5, totalCount = 6),
       onClick = {},
     )
 
@@ -2642,13 +2660,15 @@ private fun HealthCheckItemCard(
   subtitle: String,
   isHealthy: Boolean,
   shape: RoundedCornerShape,
+  testTag: String? = null,
   onClick: () -> Unit,
 ) {
   Card(
     modifier = Modifier
       .fillMaxWidth()
       .clip(shape)
-      .clickable(onClick = onClick),
+      .clickable(onClick = onClick)
+      .let { base -> if (testTag != null) base.testTag(testTag) else base },
     shape = shape,
     colors = CardDefaults.cardColors(
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
