@@ -38,6 +38,7 @@ import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 import com.managesoundmode.app.system.ActiveVolumePreview
 import com.managesoundmode.app.system.VolumePreviewKind
 import com.managesoundmode.app.system.VolumePreviewScope
@@ -48,6 +49,7 @@ import com.managesoundmode.app.ui.common.AppTestTags
 import com.managesoundmode.app.ui.theme.ManageSoundModeTheme
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -1573,5 +1575,113 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
     composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_PERMISSIONS).performClick()
     composeTestRule.onNodeWithTag(AppTestTags.Settings.GRANT_CALENDAR_PERMISSION_BUTTON).assertIsDisplayed()
+  }
+
+  // =========================================================================
+  // UC-53 a UC-56: Modos de Som Pro & Desbloqueio Vitalício (PRO-01 / SPEC-009)
+  // =========================================================================
+
+  @Test
+  fun uc53_to_uc56_proUnlockLifetime_subscreenUpsellSheetPurchaseAndRestore() {
+    var isProUnlocked by mutableStateOf(false)
+    var isPurchasePending by mutableStateOf(false)
+    var showUpsellSheet by mutableStateOf(false)
+    var upsellFeatureMessage by mutableStateOf<String?>(null)
+    var purchaseLaunched = false
+    var restoreLaunched = false
+    var selectedPalette by mutableStateOf(ZenithAtmosphericPalette.BOREAL_CLASSIC)
+
+    composeTestRule.setContent {
+      ManageSoundModeTheme(
+        zenithPalette = selectedPalette,
+        isProUnlocked = isProUnlocked,
+      ) {
+        MainDashboardContent(
+          state = MainScreenUiState.Ready(
+            currentMode = SoundMode.NORMAL,
+            streams = VolumeStreams(),
+            hasDndPermission = true,
+            hasNotificationPermission = true,
+            canScheduleExactAlarms = true,
+            hasLocationPermission = false,
+            hasAcceptedLocationDisclosure = true,
+            profiles = SoundProfile.defaultPresets,
+            isProUnlocked = isProUnlocked,
+            isPurchasePending = isPurchasePending,
+            proFormattedPrice = "R$ 19,90",
+            showProUpsellSheet = showUpsellSheet,
+            proUpsellContextMessage = upsellFeatureMessage,
+            zenithPalette = selectedPalette,
+          ),
+          onSelectMode = {},
+          onStreamVolumeChange = { _, _ -> },
+          onActivateProfile = {},
+          onStartTimer = { _, _ -> },
+          onCancelTimer = {},
+          onSaveProfile = { _, _ -> },
+          onDismissMessage = {},
+          onRequestDndPermission = {},
+          onLaunchProPurchase = {
+            purchaseLaunched = true
+            isProUnlocked = true
+          },
+          onRestorePurchases = {
+            restoreLaunched = true
+            isProUnlocked = true
+          },
+          onSetZenithPalette = { palette ->
+            if (!isProUnlocked && palette != ZenithAtmosphericPalette.BOREAL_CLASSIC) {
+              upsellFeatureMessage = AppLabels.Pro.upsellPalettesFeature
+              showUpsellSheet = true
+            } else {
+              selectedPalette = palette
+            }
+          },
+          onDismissProUpsellSheet = {
+            showUpsellSheet = false
+          },
+        )
+      }
+    }
+
+    // 1. UC-53: Abrir sub-tela Modos de Som Pro via Menu Global
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_PRO_UNLOCK).performClick()
+
+    // 2. Verificar exibição dos componentes principais na sub-tela Pro
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.SUBSCREEN).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.STATUS_BANNER).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.PURCHASE_BUTTON).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.RESTORE_PURCHASES_BUTTON).assertIsDisplayed()
+
+    // 3. Fechar sub-tela Pro
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
+
+    // 4. UC-54: Tentar selecionar paleta Pro no plano gratuito dispara o ProUpsellBottomSheet
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_PRO_UNLOCK).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.paletteChip(ZenithAtmosphericPalette.EMERALD_AURORA)).performClick()
+
+    // ProUpsellBottomSheet é exibido com o botão de compra, restauração e fechar
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.UPSELL_SHEET).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.CLOSE_UPSELL_BUTTON).performClick()
+    assertFalse(showUpsellSheet)
+
+    // 5. UC-55: Realizar compra simulada desbloqueia o Pro
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.PURCHASE_BUTTON).performClick()
+    assertTrue(purchaseLaunched)
+    assertTrue(isProUnlocked)
+
+    // O status banner atualiza para Vitalício Ativo
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.STATUS_BANNER).assertIsDisplayed()
+
+    // Agora selecionar a paleta Pro é aceito com sucesso
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.paletteChip(ZenithAtmosphericPalette.EMERALD_AURORA)).performClick()
+    assertEquals(ZenithAtmosphericPalette.EMERALD_AURORA, selectedPalette)
+
+    // 6. UC-56: Restaurar compras
+    composeTestRule.onNodeWithTag(AppTestTags.Pro.RESTORE_PURCHASES_BUTTON).performClick()
+    assertTrue(restoreLaunched)
+    assertTrue(isProUnlocked)
   }
 }

@@ -27,6 +27,7 @@ import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 import com.managesoundmode.app.system.BackgroundGeofenceManager
 import com.managesoundmode.app.system.GeofencePresenceDecision
 import com.managesoundmode.app.system.LocationProximityHelper
@@ -112,6 +113,8 @@ interface SoundModeRepository {
   suspend fun setSmartVolumeTriggerEnabled(enabled: Boolean): Result<Unit>
   suspend fun setPersistentQuickBarEnabled(enabled: Boolean): Result<Unit>
   suspend fun setQuickTileSlotProfileId(slotIndex: Int, profileId: String): Result<Unit>
+  suspend fun setZenithPalette(palette: ZenithAtmosphericPalette): Result<Unit> = Result.success(Unit)
+  suspend fun setAdminAutoRelockMinutes(minutes: Int?): Result<Unit> = Result.success(Unit)
   suspend fun toggleQuickMediaMute(): Result<Int>
   suspend fun clearTransitionLogs(): Result<Unit>
   suspend fun setAppLanguageCode(languageCode: String): Result<Unit>
@@ -1132,12 +1135,23 @@ class DefaultSoundModeRepository(
   }
 
   override suspend fun setQuickTileSlotProfileId(slotIndex: Int, profileId: String): Result<Unit> = runCatching {
-    if (slotIndex == 1) {
-      preferencesDataSource.setQuickTileSlot1ProfileId(profileId)
-    } else {
-      preferencesDataSource.setQuickTileSlot2ProfileId(profileId)
+    when (slotIndex) {
+      1 -> preferencesDataSource.setQuickTileSlot1ProfileId(profileId)
+      2 -> preferencesDataSource.setQuickTileSlot2ProfileId(profileId)
+      3 -> preferencesDataSource.setQuickTileSlot3ProfileId(profileId)
+      else -> preferencesDataSource.setQuickTileSlot1ProfileId(profileId)
     }
     onRefreshExternalSurfaces()
+    refreshSystemState()
+  }
+
+  override suspend fun setZenithPalette(palette: ZenithAtmosphericPalette): Result<Unit> = runCatching {
+    preferencesDataSource.setZenithPalette(palette)
+    refreshSystemState()
+  }
+
+  override suspend fun setAdminAutoRelockMinutes(minutes: Int?): Result<Unit> = runCatching {
+    preferencesDataSource.setAdminAutoRelockMinutes(minutes)
     refreshSystemState()
   }
 

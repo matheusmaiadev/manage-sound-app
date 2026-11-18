@@ -10,6 +10,7 @@
     <string name="qs_tile_silent_label">Modo: Silêncio</string>
     <string name="qs_tile_profile_1_label">Perfil Rápido 1</string>
     <string name="qs_tile_profile_2_label">Perfil Rápido 2</string>
+    <string name="qs_tile_profile_3_label">Perfil Rápido 3</string>
     <string name="qs_tile_timer_label">Timer Silêncio</string>
     <string name="qs_tile_media_mute_label">Zero Mídia</string>
 

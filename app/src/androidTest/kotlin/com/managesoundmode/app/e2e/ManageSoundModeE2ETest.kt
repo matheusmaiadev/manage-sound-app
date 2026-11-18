@@ -37,6 +37,9 @@ import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.domain.model.CachedProEntitlement
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
+import com.managesoundmode.app.data.billing.FakeBillingRepository
 import com.managesoundmode.app.R
 import com.managesoundmode.app.receiver.SystemAutomationReceiver
 import com.managesoundmode.app.system.BackgroundGeofenceManager
@@ -186,7 +189,7 @@ class ManageSoundModeE2ETest {
     assertTrue(prefsAfterDuplicate.customProfiles.any { it.name.contains("(Cópia)") })
 
     // 4. Ativar o perfil "Trabalho (Vibrar)" e validar retorno automático para a aba Agora
-    composeRule.onNodeWithTag(AppTestTags.Profiles.card("preset_work")).performClick()
+    composeRule.onNodeWithTag(AppTestTags.Profiles.card("preset_work")).performScrollTo().performClick()
     composeRule.waitForIdle()
 
     composeRule.onNodeWithTag(AppTestTags.Now.HERO_MODE_CARD).assertIsDisplayed()
@@ -197,13 +200,17 @@ class ManageSoundModeE2ETest {
 
   @Test
   fun e2e03_nowTab_soundModeSwitchAndContextualTimerLifecycleWithRealDataStore() {
+    // 0. Garantir foco na aba Agora
+    composeRule.onNodeWithTag(AppTestTags.Tabs.NOW).performClick()
+    composeRule.waitForIdle()
+
     // 1. Alternar para Silêncio + Vibrar pela Split Capsule 2+1 no Hero Card
     composeRule.onNodeWithTag(AppTestTags.Now.HERO_MODE_CARD).assertIsDisplayed()
     composeRule.onNodeWithTag(AppTestTags.Now.AUDIO_MODE_SILENT_BUTTON).performClick()
     composeRule.waitForIdle()
 
-    // 2. Iniciar Timer Contextual de 30 minutos
-    composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).performClick()
+    // 2. Iniciar Timer Contextual de 30 minutos (com scroll para garantir visibilidade)
+    composeRule.onNodeWithTag(AppTestTags.Now.timerChip(30)).performScrollTo().performClick()
     composeRule.waitForIdle()
 
     val prefsWithTimer = awaitPrefs { it.activeTimer != null }
@@ -1163,6 +1170,74 @@ class ManageSoundModeE2ETest {
         app.container.preferencesDataSource.resetFactoryDefaults()
         app.container.preferencesDataSource.setOnboardingCompleted(true)
         app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
+        app.container.soundModeRepository.refreshSystemState()
+      }
+    }
+  }
+
+  // =========================================================================
+  // e2e13: Desbloqueio Vitalício Pro e Restauração de Compras (SPEC-009)
+  // =========================================================================
+
+  @Test
+  fun e2e13_spec009_proUnlockLifetimeAndRestorePurchasesJourney() {
+    try {
+      // 1. Abrir sub-tela Modos de Som Pro pelo Menu Global
+      composeRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+      composeRule.waitForIdle()
+      composeRule.onNodeWithTag(AppTestTags.TopBar.MENU_PRO_UNLOCK).performClick()
+      composeRule.waitForIdle()
+
+      // 2. Verificar exibição inicial da sub-tela e banner gratuito
+      composeRule.onNodeWithTag(AppTestTags.Pro.SUBSCREEN).assertIsDisplayed()
+      composeRule.onNodeWithTag(AppTestTags.Pro.STATUS_BANNER).assertIsDisplayed()
+      composeRule.onNodeWithTag(AppTestTags.Pro.PURCHASE_BUTTON).assertIsDisplayed()
+
+      // 3. Simula validação de compra autêntica assinando o cache com HMAC-SHA256 real do app
+      val epoch = System.currentTimeMillis()
+      val tokenHash = "e2e_verified_purchase_token_hash"
+      val payload = "true|$epoch|$tokenHash"
+      val signature = InternalIntentSecurity.computeHmacSha256(app, payload)
+      val signedCached = CachedProEntitlement(
+        isProUnlocked = true,
+        unlockedAtEpochMillis = epoch,
+        purchaseTokenHash = tokenHash,
+        hmacSignature = signature,
+      )
+      runBlocking {
+        app.container.preferencesDataSource.setCachedProEntitlement(signedCached)
+      }
+      composeRule.waitForIdle()
+
+      // 4. Selecionar paleta atmosférica Pro (Aurora Esmeralda)
+      composeRule.onNodeWithTag(AppTestTags.Pro.paletteChip(ZenithAtmosphericPalette.EMERALD_AURORA)).performClick()
+      composeRule.waitForIdle()
+
+      val prefsWithPalette = awaitPrefs("zenithPaletteEmerald") {
+        it.zenithPalette == ZenithAtmosphericPalette.EMERALD_AURORA
+      }
+      assertEquals(ZenithAtmosphericPalette.EMERALD_AURORA, prefsWithPalette.zenithPalette)
+
+      // 5. Fechar sub-tela Pro
+      composeRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
+      composeRule.waitForIdle()
+
+      // 6. Restaurar compras
+      composeRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+      composeRule.waitForIdle()
+      composeRule.onNodeWithTag(AppTestTags.TopBar.MENU_PRO_UNLOCK).performClick()
+      composeRule.waitForIdle()
+
+      composeRule.onNodeWithTag(AppTestTags.Pro.RESTORE_PURCHASES_BUTTON).performClick()
+      composeRule.waitForIdle()
+
+      // Fechar sub-tela
+      composeRule.onNodeWithTag(AppTestTags.Settings.CLOSE_SUBSCREEN_BUTTON).performClick()
+      composeRule.waitForIdle()
+    } finally {
+      runBlocking {
+        app.container.preferencesDataSource.resetFactoryDefaults()
+        app.container.preferencesDataSource.setOnboardingCompleted(true)
         app.container.soundModeRepository.refreshSystemState()
       }
     }

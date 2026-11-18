@@ -179,6 +179,17 @@
             </intent-filter>
         </service>
 
+        <service
+            android:name=".tile.ProfileSlot3TileService"
+            android:exported="true"
+            android:icon="@drawable/ic_widget_style"
+            android:label="@string/qs_tile_profile_3_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- Opção C: Tile de Timer Rápido (30m / 1h / 2h) -->
         <service
             android:name=".tile.QuickTimerTileService"

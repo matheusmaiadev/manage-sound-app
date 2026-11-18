@@ -16,7 +16,6 @@ import kotlinx.coroutines.launch
 
 class ManageSoundApplication : Application() {
   lateinit var container: AppContainer
-    private set
 
   private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

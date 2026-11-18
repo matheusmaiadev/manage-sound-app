@@ -15,6 +15,7 @@ import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.domain.model.Weekday
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 import java.util.Locale
 
 enum class AppLanguage(
@@ -273,6 +274,8 @@ object AppLabels {
       get() = tr("Assistente de Setup & Permissões", "Setup & Permissions Wizard")
     val accessControlMenu: String
       get() = tr("Controle de Acesso & PIN", "Access Control & PIN")
+    val proUnlockMenu: String
+      get() = tr("Modos de Som Pro", "Sound Modes Pro")
   }
 
   object Fab {
@@ -939,6 +942,14 @@ object AppLabels {
       get() = tr("Permissões & Diagnóstico", "Permissions & Diagnostics")
     val categoryAccessControlTitle: String
       get() = tr("Controle de Acesso & PIN (RBAC)", "Access Control & PIN (RBAC)")
+    val categoryProUnlockTitle: String
+      get() = tr("Modos de Som Pro", "Sound Modes Pro")
+    fun categoryProUnlockSubtitle(isProUnlocked: Boolean): String =
+      if (isProUnlocked) {
+        tr("Vitalício Ativo • Recursos Ilimitados", "Lifetime Active • Unlimited Features")
+      } else {
+        tr("Compra única vitalícia • 100% Sem anúncios", "One-time lifetime purchase • 100% Ad-free")
+      }
     val categoryHistoryTitle: String
       get() = tr("Histórico de Transições", "Transition History")
     val categoryBackupResetTitle: String
@@ -1056,6 +1067,13 @@ object AppLabels {
         "Zero servidores, zero rastreadores e zero anúncios. Todos os seus perfis, horários, coordenadas de cercas geográficas e logs de transição permanecem armazenados exclusivamente na memória local do seu dispositivo.",
         "Zero servers, zero trackers and zero ads. All your profiles, schedules, geofence coordinates and transition logs remain stored exclusively in your device's local storage.",
       )
+
+    val slot3TileTitle: String get() = tr("Perfil do Bloco 3 (Pro)", "Slot 3 Tile Profile (Pro)")
+    val slot3TileDesc: String get() = tr("Escolha a cena ativada pelo terceiro Quick Settings Tile.", "Choose the scene activated by the third Quick Settings Tile.")
+    val zenithPaletteTitle: String get() = tr("Paleta Atmosférica ZENITH", "ZENITH Atmospheric Palette")
+    val zenithPaletteDesc: String get() = tr("Personalize as cores dos orbes e containers com paletas atmosféricas.", "Customize orb and container colors with atmospheric palettes.")
+    val adminAutoRelockTitle: String get() = tr("Auto-Relock da Sessão Admin", "Admin Session Auto-Relock")
+    val adminAutoRelockDesc: String get() = tr("Bloqueia novamente o acesso de administrador após inatividade.", "Relocks admin access automatically after inactivity.")
 
     fun appearanceSummary(themeLabel: String, languageLabel: String, dynamicColor: Boolean): String =
       tr(
@@ -1292,6 +1310,8 @@ object AppLabels {
       get() = tr("Desbloquear Administrador", "Unlock Administrator")
     val unlockedAsAdminMessage: String
       get() = tr("Acesso Administrador restaurado", "Administrator access restored")
+    val adminAutoRelockedMessage: String
+      get() = tr("Sessão de Administrador expirou e foi bloqueada automaticamente.", "Admin session expired and was automatically locked.")
 
     fun roleTitle(role: AppAccessRole): String =
       when (role) {
@@ -1725,6 +1745,9 @@ object AppLabels {
     val slot2Title: String get() = tr("Perfil Rápido 2", "Quick Profile 2")
     val slot2Desc: String
       get() = tr("Ativa os 4 volumes e estado do Perfil 2 em 1 toque", "Activates 4 volumes and state of Profile 2 in 1 tap")
+    val slot3Title: String get() = tr("Perfil Rápido 3", "Quick Profile 3")
+    val slot3Desc: String
+      get() = tr("Ativa os 4 volumes e estado do Perfil 3 em 1 toque (Pro)", "Activates 4 volumes and state of Profile 3 in 1 tap (Pro)")
     val quickTimerTitle: String get() = tr("Timer Silêncio (30m/1h/2h)", "Silent Timer (30m/1h/2h)")
     val quickTimerDesc: String
       get() = tr("Inicia timer de silêncio com auto-restore ou cancela", "Starts silent timer with auto-restore or cancels")
@@ -1799,5 +1822,133 @@ object AppLabels {
     val sleepLong: String get() = tr("Ativar perfil Dormir", "Activate Sleep profile")
     val normalShort: String get() = tr("Som Padrão", "Default Sound")
     val normalLong: String get() = tr("Restaurar perfil Padrão (Dia)", "Restore Default (Day) profile")
+  }
+
+  object Pro {
+    val title: String get() = tr("Modos de Som Pro", "Sound Modes Pro")
+    val subtitle: String get() = tr("Desbloqueio vitalício • 100% Sem anúncios", "Lifetime unlock • 100% Ad-free")
+    val activeLifetimeBannerTitle: String get() = tr("Vitalício Ativo", "Lifetime Active")
+    val activeLifetimeBannerDesc: String
+      get() = tr(
+        "Seu acesso vitalício aos Modos de Som Pro está ativo neste dispositivo. Todos os recursos avançados estão liberados.",
+        "Your lifetime access to Sound Modes Pro is active on this device. All advanced features are unlocked.",
+      )
+    val freePlanBannerTitle: String get() = tr("Plano Gratuito", "Free Plan")
+    val freePlanBannerDesc: String
+      get() = tr(
+        "Aproveite todos os recursos básicos gratuitamente. Desbloqueie o Pro para cotas ilimitadas e personalização total.",
+        "Enjoy all core features for free. Unlock Pro for unlimited quotas and complete personalization.",
+      )
+    val pendingBannerTitle: String get() = tr("Pagamento em Processamento", "Payment Processing")
+    val pendingBannerDesc: String
+      get() = tr(
+        "Aguardando confirmação do pagamento pela Google Play Store. O Pro será ativado automaticamente assim que compensar.",
+        "Waiting for payment confirmation from Google Play Store. Pro will activate automatically once approved.",
+      )
+
+    val benefitUnlimitedProfilesTitle: String get() = tr("Perfis Customizados Ilimitados", "Unlimited Custom Profiles")
+    val benefitUnlimitedProfilesDesc: String get() = tr("Crie quantas cenas acústicas desejar além dos 5 do plano gratuito.", "Create as many custom scenes as you wish beyond the 5 on the free plan.")
+
+    val benefitUnlimitedSchedulesTitle: String get() = tr("Horários Fixos Ilimitados", "Unlimited Schedules")
+    val benefitUnlimitedSchedulesDesc: String get() = tr("Configure regras de tempo sem restrição de quantidade.", "Set up schedule rules with no quantity limits.")
+
+    val benefitUnlimitedLocationsTitle: String get() = tr("Cercas e Wi-Fi Ilimitados", "Unlimited Geofences & Wi-Fi")
+    val benefitUnlimitedLocationsDesc: String get() = tr("Automatize seus locais de trabalho, estudo e lazer sem limite.", "Automate work, study and home locations without limits.")
+
+    val benefitUnlimitedCalendarTitle: String get() = tr("Automações de Agenda Ilimitadas", "Unlimited Calendar Automations")
+    val benefitUnlimitedCalendarDesc: String get() = tr("Sincronize múltiplos calendários e palavras-chave de eventos.", "Sync multiple calendars and event keywords.")
+
+    val benefitSlot3Title: String get() = tr("3º Bloco de Perfil Rápido", "3rd Quick Profile Tile")
+    val benefitSlot3Desc: String get() = tr("Adicione um terceiro perfil favorito no header de notificações do Android.", "Add a third favorite profile to your Android notification header.")
+
+    val benefitAutoRelockTitle: String get() = tr("Auto-Relock de Sessão Admin", "Admin Session Auto-Relock")
+    val benefitAutoRelockDesc: String get() = tr("Bloqueio automático temporizado (5m, 15m, 30m) para segurança total.", "Timed automatic relock (5m, 15m, 30m) for maximum security.")
+
+    val benefitPalettesTitle: String get() = tr("+2 Paletas Atmosféricas ZENITH", "+2 ZENITH Atmospheric Palettes")
+    val benefitPalettesDesc: String get() = tr("Aurora Esmeralda e Oceano Abissal nos modos Dark e Light.", "Emerald Aurora and Abyssal Ocean in Dark and Light modes.")
+
+    val benefitEthicalTitle: String get() = tr("100% Sem Anúncios e Sem Assinaturas", "100% Ad-Free & Subscription-Free")
+    val benefitEthicalDesc: String get() = tr("Compra única vitalícia. Sem mensalidades, sem anúncios e zero rastreadores.", "One-time lifetime purchase. No subscriptions, no ads, zero trackers.")
+
+    fun purchaseButton(price: String?): String =
+      if (price != null) {
+        tr("Desbloquear Modos de Som Pro • $price", "Unlock Sound Modes Pro • $price")
+      } else {
+        tr("Desbloquear Modos de Som Pro", "Unlock Sound Modes Pro")
+      }
+
+    val restorePurchasesButton: String get() = tr("Restaurar compras", "Restore purchases")
+    val restorePurchasesHint: String
+      get() = tr(
+        "Já comprou em outro dispositivo ou reinstalou o app? Toque para restaurar seu acesso vitalício.",
+        "Already purchased on another device or reinstalled? Tap to restore your lifetime access.",
+      )
+
+    val purchaseSuccessMessage: String
+      get() = tr("Modos de Som Pro desbloqueado com sucesso! Aproveite todos os recursos vitalícios.", "Sound Modes Pro unlocked successfully! Enjoy all lifetime features.")
+    val restoreSuccessMessage: String
+      get() = tr("Compras restauradas com sucesso! Modos de Som Pro ativo.", "Purchases restored successfully! Sound Modes Pro active.")
+    val noPurchaseFoundMessage: String
+      get() = tr("Nenhuma compra ativa encontrada na sua conta Google Play.", "No active purchases found in your Google Play account.")
+    val purchasePendingMessage: String
+      get() = tr("Pagamento em processamento. Seu acesso Pro será liberado assim que confirmado.", "Payment processing. Your Pro access will be unlocked once confirmed.")
+    val purchaseCancelledMessage: String
+      get() = tr("Compra cancelada.", "Purchase cancelled.")
+    val alreadyOwnedMessage: String
+      get() = tr("Você já possui o Modos de Som Pro! Acesso ativado.", "You already own Sound Modes Pro! Access activated.")
+    fun purchaseErrorMessage(msg: String): String =
+      tr("Falha no faturamento: $msg", "Billing failed: $msg")
+
+    val upsellProfilesQuota: String
+      get() = tr(
+        "Cota gratuita atingida (máximo de 5 perfis customizados). Desbloqueie o Pro para criar perfis ilimitados!",
+        "Free quota reached (maximum 5 custom profiles). Unlock Pro to create unlimited profiles!",
+      )
+    val upsellSchedulesQuota: String
+      get() = tr(
+        "Cota gratuita atingida (máximo de 3 horários). Desbloqueie o Pro para horários ilimitados!",
+        "Free quota reached (maximum 3 schedules). Unlock Pro for unlimited schedules!",
+      )
+    val upsellLocationsQuota: String
+      get() = tr(
+        "Cota gratuita atingida (máximo de 3 locais). Desbloqueie o Pro para locais ilimitados!",
+        "Free quota reached (maximum 3 locations). Unlock Pro for unlimited locations!",
+      )
+    val upsellCalendarQuota: String
+      get() = tr(
+        "Cota gratuita atingida (máximo de 1 regra de agenda). Desbloqueie o Pro para regras de agenda ilimitadas!",
+        "Free quota reached (maximum 1 calendar rule). Unlock Pro for unlimited calendar rules!",
+      )
+    val upsellPalettesFeature: String
+      get() = tr(
+        "As paletas Aurora Esmeralda e Oceano Abissal são exclusivas do Modos de Som Pro.",
+        "Emerald Aurora and Abyssal Ocean palettes are exclusive to Sound Modes Pro.",
+      )
+    val upsellSlot3Feature: String
+      get() = tr(
+        "O 3º Bloco de Perfil Rápido é exclusivo do Modos de Som Pro.",
+        "The 3rd Quick Profile Tile is exclusive to Sound Modes Pro.",
+      )
+    val upsellAutoRelockFeature: String
+      get() = tr(
+        "O Auto-Relock de Sessão Admin é exclusivo do Modos de Som Pro.",
+        "Admin Session Auto-Relock is exclusive to Sound Modes Pro.",
+      )
+
+    fun paletteName(palette: ZenithAtmosphericPalette): String =
+      when (palette) {
+        ZenithAtmosphericPalette.BOREAL_CLASSIC -> tr("Noite Boreal (Padrão)", "Boreal Classic (Default)")
+        ZenithAtmosphericPalette.EMERALD_AURORA -> tr("Aurora Esmeralda (Pro)", "Emerald Aurora (Pro)")
+        ZenithAtmosphericPalette.ABYSSAL_OCEAN -> tr("Oceano Abissal (Pro)", "Abyssal Ocean (Pro)")
+      }
+
+    fun autoRelockOption(minutes: Int?): String =
+      when (minutes) {
+        null, 0 -> tr("Desativado", "Disabled")
+        5 -> tr("5 minutos", "5 minutes")
+        15 -> tr("15 minutos", "15 minutes")
+        30 -> tr("30 minutos", "30 minutes")
+        else -> tr("$minutes minutos", "$minutes minutes")
+      }
   }
 }

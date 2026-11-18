@@ -1,6 +1,8 @@
 package com.managesoundmode.app.di
 
 import android.content.Context
+import com.managesoundmode.app.data.billing.BillingRepository
+import com.managesoundmode.app.data.billing.PlayBillingRepository
 import com.managesoundmode.app.data.local.DataStoreSoundPreferencesDataSource
 import com.managesoundmode.app.data.local.SoundPreferencesDataSource
 import com.managesoundmode.app.data.repository.DefaultSoundModeRepository
@@ -28,6 +30,7 @@ interface AppContainer {
   val preferencesDataSource: SoundPreferencesDataSource
   val volumePreviewPlayer: VolumePreviewPlayer
   val soundModeRepository: SoundModeRepository
+  var billingRepository: BillingRepository
 }
 
 class DefaultAppContainer(
@@ -49,6 +52,9 @@ class DefaultAppContainer(
   override val volumePreviewPlayer: VolumePreviewPlayer by lazy {
     AndroidVolumePreviewPlayer(appContext)
   }
+
+  override var billingRepository: BillingRepository =
+    PlayBillingRepository(appContext, preferencesDataSource)
 
   override val soundModeRepository: SoundModeRepository by lazy {
     DefaultSoundModeRepository(

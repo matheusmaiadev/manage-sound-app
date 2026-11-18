@@ -63,3 +63,8 @@
     @android.webkit.JavascriptInterface <methods>;
 }
 -keep class com.managesoundmode.app.ui.components.OsmWebMapBridge { *; }
+
+# Google Play Billing Library v7+
+-keep class com.android.vending.billing.** { *; }
+-keep class com.android.billingclient.** { *; }
+

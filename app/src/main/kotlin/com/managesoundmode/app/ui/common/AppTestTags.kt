@@ -7,6 +7,7 @@ import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.StreamSortMode
 import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.VolumeStreamType
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 
 /**
  * Catálogo centralizado de identificadores de teste (Test IDs / testTag) de toda a interface.
@@ -33,6 +34,7 @@ object AppTestTags {
     const val MENU_ABOUT = "topbar_menu_about"
     const val MENU_SETUP_WIZARD = "topbar_menu_setup_wizard"
     const val MENU_ACCESS_CONTROL = "topbar_menu_access_control"
+    const val MENU_PRO_UNLOCK = "topbar_menu_pro_unlock"
     const val ROLE_BADGE_CHIP = "topbar_role_badge_chip"
   }
 
@@ -199,6 +201,7 @@ object AppTestTags {
     const val CATEGORY_GADGETS_WIDGETS = "settings_category_gadgets_widgets"
     const val CATEGORY_PERMISSIONS = "settings_category_permissions"
     const val CATEGORY_ACCESS_CONTROL = "settings_category_access_control"
+    const val CATEGORY_PRO_UNLOCK = "settings_category_pro_unlock"
     const val CATEGORY_HISTORY = "settings_category_history"
     const val CATEGORY_BACKUP_RESET = "settings_category_backup_reset"
     const val CATEGORY_ABOUT = "settings_category_about"
@@ -286,5 +289,19 @@ object AppTestTags {
 
     fun roleCard(role: AppAccessRole): String = "access_role_card_${role.name}"
     fun permissionSwitch(permission: AppPermission): String = "access_permission_switch_${permission.name}"
+  }
+
+  object Pro {
+    const val SUBSCREEN = "pro_subscreen"
+    const val UPSELL_SHEET = "pro_upsell_sheet"
+    const val PURCHASE_BUTTON = "pro_purchase_button"
+    const val RESTORE_PURCHASES_BUTTON = "pro_restore_purchases_button"
+    const val STATUS_BANNER = "pro_status_banner"
+    const val CLOSE_UPSELL_BUTTON = "pro_close_upsell_button"
+
+    fun paletteChip(palette: ZenithAtmosphericPalette): String =
+      "zenith_palette_chip_${palette.name}"
+    fun autoRelockChip(minutes: Int): String =
+      "pro_auto_relock_chip_$minutes"
   }
 }

@@ -130,6 +130,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material.icons.filled.WorkspacePremium
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.BaseAudioMode
@@ -303,6 +306,8 @@ fun MainScreen(
       ManageSoundModeTheme(
         themeMode = state.themeMode,
         dynamicColor = state.useDynamicColor,
+        zenithPalette = state.zenithPalette,
+        isProUnlocked = state.isProUnlocked,
       ) {
         MainDashboardContent(
           state = state,
@@ -493,6 +498,11 @@ fun MainScreen(
           onStartStreamLoopPreview = viewModel::onStartStreamLoopPreview,
           onUpdateStreamLoopPercent = viewModel::onUpdateStreamLoopPercent,
           onStopVolumePreview = viewModel::onStopVolumePreview,
+          onLaunchProPurchase = viewModel::launchProPurchase,
+          onRestorePurchases = viewModel::restorePurchases,
+          onSetZenithPalette = viewModel::onSetZenithPalette,
+          onSetAdminAutoRelockMinutes = viewModel::onSetAdminAutoRelockMinutes,
+          onDismissProUpsellSheet = viewModel::dismissProUpsellSheet,
           modifier = modifier,
         )
       }
@@ -608,6 +618,11 @@ internal fun MainDashboardContent(
   onStartStreamLoopPreview: (VolumeStreamType, Int, VolumePreviewScope, Boolean) -> Unit = { _, _, _, _ -> },
   onUpdateStreamLoopPercent: (VolumeStreamType, Int, VolumePreviewScope) -> Unit = { _, _, _ -> },
   onStopVolumePreview: () -> Unit = {},
+  onLaunchProPurchase: (Activity) -> Unit = {},
+  onRestorePurchases: () -> Unit = {},
+  onSetZenithPalette: (ZenithAtmosphericPalette) -> Unit = {},
+  onSetAdminAutoRelockMinutes: (Int?) -> Unit = {},
+  onDismissProUpsellSheet: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val snackbarHostState = remember { SnackbarHostState() }
@@ -946,6 +961,10 @@ internal fun MainDashboardContent(
           onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
           onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
           onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
+          onLaunchProPurchase = onLaunchProPurchase,
+          onRestorePurchases = onRestorePurchases,
+          onSetZenithPalette = onSetZenithPalette,
+          onSetAdminAutoRelockMinutes = onSetAdminAutoRelockMinutes,
           onRequestCalendarPermission = onRequestCalendarPermission,
           modifier = Modifier.padding(settingsPadding),
         )
@@ -1005,7 +1024,21 @@ internal fun MainDashboardContent(
       onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
       onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
       onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
+      onLaunchProPurchase = onLaunchProPurchase,
+      onRestorePurchases = onRestorePurchases,
+      onSetZenithPalette = onSetZenithPalette,
+      onSetAdminAutoRelockMinutes = onSetAdminAutoRelockMinutes,
       onRequestCalendarPermission = onRequestCalendarPermission,
+    )
+  }
+
+  if (state.showProUpsellSheet) {
+    val activity = LocalContext.current.findActivity()
+    ProUpsellBottomSheet(
+      state = state,
+      onDismiss = onDismissProUpsellSheet,
+      onLaunchProPurchase = { activity?.let { onLaunchProPurchase(it) } },
+      onRestorePurchases = onRestorePurchases,
     )
   }
 
@@ -1253,6 +1286,22 @@ internal fun MainDashboardContent(
                   }
                 },
                 modifier = Modifier.testTag(AppTestTags.TopBar.MENU_RESTORE_DEFAULTS),
+              )
+
+              DropdownMenuItem(
+                text = { Text(AppLabels.TopBar.proUnlockMenu) },
+                leadingIcon = {
+                  Icon(
+                    imageVector = if (state.isProUnlocked) Icons.Default.Verified else Icons.Default.WorkspacePremium,
+                    contentDescription = null,
+                    tint = if (state.isProUnlocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                  )
+                },
+                onClick = {
+                  showGlobalOverflowMenu = false
+                  globalSettingsDialogCategory = SettingsCategory.PRO_UNLOCK
+                },
+                modifier = Modifier.testTag(AppTestTags.TopBar.MENU_PRO_UNLOCK),
               )
 
               DropdownMenuItem(
@@ -2673,7 +2722,7 @@ private fun MainDashboardPreview() {
   }
 }
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
+internal tailrec fun Context.findActivity(): Activity? = when (this) {
   is Activity -> this
   is ContextWrapper -> baseContext.findActivity()
   else -> null

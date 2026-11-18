@@ -1,5 +1,6 @@
 package com.managesoundmode.app.ui.main
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BluetoothAudio
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
@@ -44,10 +46,13 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockClock
 import androidx.compose.material.icons.filled.MusicOff
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
@@ -60,11 +65,21 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SettingsBrightness
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.width
+import com.managesoundmode.app.domain.model.ProEntitlementState
+import com.managesoundmode.app.domain.model.ProFeatureGate
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -136,6 +151,7 @@ enum class SettingsCategory {
   GADGETS_WIDGETS,
   PERMISSIONS,
   ACCESS_CONTROL,
+  PRO_UNLOCK,
   HISTORY,
   BACKUP_RESET,
   ABOUT,
@@ -197,6 +213,10 @@ internal fun SettingsAndProfilesTabContent(
   onSetVolumePreviewEnabled: (Boolean) -> Unit = {},
   onSetUseSystemSoundsForPreview: (Boolean) -> Unit = {},
   onSetSilentPreAdjustEnabled: (Boolean) -> Unit = {},
+  onLaunchProPurchase: (Activity) -> Unit = {},
+  onRestorePurchases: () -> Unit = {},
+  onSetZenithPalette: (ZenithAtmosphericPalette) -> Unit = {},
+  onSetAdminAutoRelockMinutes: (Int?) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var openCategory by rememberSaveable { mutableStateOf<SettingsCategory?>(null) }
@@ -305,6 +325,10 @@ internal fun SettingsAndProfilesTabContent(
       onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
       onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
       onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
+      onLaunchProPurchase = onLaunchProPurchase,
+      onRestorePurchases = onRestorePurchases,
+      onSetZenithPalette = onSetZenithPalette,
+      onSetAdminAutoRelockMinutes = onSetAdminAutoRelockMinutes,
     )
   }
 
@@ -440,6 +464,17 @@ internal fun SettingsAndProfilesTabContent(
             openCategory = SettingsCategory.ACCESS_CONTROL
           }
         },
+      )
+    }
+
+    item {
+      SettingsCategoryRowCard(
+        icon = if (state.isProUnlocked) Icons.Default.Verified else Icons.Default.WorkspacePremium,
+        title = AppLabels.Settings.categoryProUnlockTitle,
+        subtitle = AppLabels.Settings.categoryProUnlockSubtitle(state.isProUnlocked),
+        shape = RoundedCornerShape(22.dp),
+        testTag = AppTestTags.Settings.CATEGORY_PRO_UNLOCK,
+        onClick = { openCategory = SettingsCategory.PRO_UNLOCK },
       )
     }
 
@@ -750,6 +785,10 @@ internal fun SettingsCategoryFullScreenDialog(
   onSetVolumePreviewEnabled: (Boolean) -> Unit = {},
   onSetUseSystemSoundsForPreview: (Boolean) -> Unit = {},
   onSetSilentPreAdjustEnabled: (Boolean) -> Unit = {},
+  onLaunchProPurchase: (Activity) -> Unit = {},
+  onRestorePurchases: () -> Unit = {},
+  onSetZenithPalette: (ZenithAtmosphericPalette) -> Unit = {},
+  onSetAdminAutoRelockMinutes: (Int?) -> Unit = {},
 ) {
   val context = LocalContext.current
   val subScreenSnackbarHostState = remember { SnackbarHostState() }
@@ -774,6 +813,7 @@ internal fun SettingsCategoryFullScreenDialog(
     SettingsCategory.HISTORY -> AppLabels.Settings.categoryHistoryTitle
     SettingsCategory.BACKUP_RESET -> AppLabels.Settings.categoryBackupResetTitle
     SettingsCategory.ABOUT -> AppLabels.Settings.categoryAboutTitle
+    SettingsCategory.PRO_UNLOCK -> AppLabels.Settings.categoryProUnlockTitle
   }
 
   Dialog(
@@ -838,6 +878,7 @@ internal fun SettingsCategoryFullScreenDialog(
             onSetAppLanguage = onSetAppLanguage,
             onSetUseDynamicColor = onSetUseDynamicColor,
             onSetHapticFeedbackEnabled = onSetHapticFeedbackEnabled,
+            onSetZenithPalette = onSetZenithPalette,
             modifier = Modifier.padding(innerPadding),
           )
         }
@@ -907,9 +948,11 @@ internal fun SettingsCategoryFullScreenDialog(
         SettingsCategory.ACCESS_CONTROL -> {
           AccessControlSubScreen(
             config = state.accessControlConfig,
+            adminAutoRelockMinutes = state.adminAutoRelockMinutes,
             onSetAccessRole = onSetAccessRole,
             onToggleAccessPermission = onToggleAccessPermission,
             onSetAccessPin = onSetAccessPin,
+            onSetAdminAutoRelockMinutes = onSetAdminAutoRelockMinutes,
             modifier = Modifier.padding(innerPadding),
           )
         }
@@ -934,6 +977,18 @@ internal fun SettingsCategoryFullScreenDialog(
 
         SettingsCategory.ABOUT -> {
           AboutAndPrivacySubScreen(
+            modifier = Modifier.padding(innerPadding),
+          )
+        }
+
+        SettingsCategory.PRO_UNLOCK -> {
+          val activity = context.findActivity()
+          ProUnlockSettingsSubScreen(
+            state = state,
+            onLaunchProPurchase = { activity?.let { onLaunchProPurchase(it) } },
+            onRestorePurchases = onRestorePurchases,
+            onSetZenithPalette = onSetZenithPalette,
+            onSetAdminAutoRelockMinutes = onSetAdminAutoRelockMinutes,
             modifier = Modifier.padding(innerPadding),
           )
         }
@@ -1021,9 +1076,11 @@ internal fun AccessPinChallengeDialog(
 @Composable
 private fun AccessControlSubScreen(
   config: AccessControlConfig,
+  adminAutoRelockMinutes: Int? = null,
   onSetAccessRole: (AppAccessRole) -> Unit,
   onToggleAccessPermission: (AppPermission, Boolean) -> Unit,
   onSetAccessPin: (String?) -> Unit,
+  onSetAdminAutoRelockMinutes: (Int?) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var pinDraft by rememberSaveable(config.pinCode) {
@@ -1238,6 +1295,31 @@ private fun AccessControlSubScreen(
         }
       }
     }
+
+    Spacer(modifier = Modifier.height(14.dp))
+
+    // 4. Auto-Relock de Sessão Admin (Pro)
+    SectionHeader(title = AppLabels.Settings.adminAutoRelockTitle)
+    Text(
+      text = AppLabels.Settings.adminAutoRelockDesc,
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(bottom = 8.dp),
+    )
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      listOf(0, 5, 15, 30).forEach { mins ->
+        val isSelected = (adminAutoRelockMinutes ?: 0) == mins
+        FilterChip(
+          selected = isSelected,
+          onClick = { onSetAdminAutoRelockMinutes(if (mins == 0) null else mins) },
+          label = { Text(AppLabels.Pro.autoRelockOption(mins)) },
+          modifier = Modifier.testTag(AppTestTags.Pro.autoRelockChip(mins)),
+        )
+      }
+    }
   }
 }
 
@@ -1249,6 +1331,7 @@ private fun AppearanceSettingsSubScreen(
   onSetAppLanguage: (AppLanguage) -> Unit,
   onSetUseDynamicColor: (Boolean) -> Unit,
   onSetHapticFeedbackEnabled: (Boolean) -> Unit,
+  onSetZenithPalette: (ZenithAtmosphericPalette) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -1261,7 +1344,7 @@ private fun AppearanceSettingsSubScreen(
     // 1. Tema
     Card(
       modifier = Modifier.fillMaxWidth(),
-      shape = groupedCardShape(index = 0, totalCount = 4),
+      shape = groupedCardShape(index = 0, totalCount = 5),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
       Column(
@@ -1304,7 +1387,7 @@ private fun AppearanceSettingsSubScreen(
     // 2. Idioma
     Card(
       modifier = Modifier.fillMaxWidth(),
-      shape = groupedCardShape(index = 1, totalCount = 4),
+      shape = groupedCardShape(index = 1, totalCount = 5),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
       Column(
@@ -1336,7 +1419,7 @@ private fun AppearanceSettingsSubScreen(
     // 3. Cores Dinâmicas (Material You)
     Card(
       modifier = Modifier.fillMaxWidth(),
-      shape = groupedCardShape(index = 2, totalCount = 4),
+      shape = groupedCardShape(index = 2, totalCount = 5),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
       Row(
@@ -1380,7 +1463,7 @@ private fun AppearanceSettingsSubScreen(
     // 4. Vibração Tátil nos Controles
     Card(
       modifier = Modifier.fillMaxWidth(),
-      shape = groupedCardShape(index = 3, totalCount = 4),
+      shape = groupedCardShape(index = 3, totalCount = 5),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
       Row(
@@ -1418,6 +1501,57 @@ private fun AppearanceSettingsSubScreen(
           onCheckedChange = onSetHapticFeedbackEnabled,
           modifier = Modifier.testTag(AppTestTags.Settings.HAPTIC_FEEDBACK_SWITCH),
         )
+      }
+    }
+
+    // 5. Paletas Atmosféricas ZENITH (Pro)
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = groupedCardShape(index = 4, totalCount = 5),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Palette,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = AppLabels.Settings.zenithPaletteTitle,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = AppLabels.Settings.zenithPaletteDesc,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+        LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          items(ZenithAtmosphericPalette.entries.toTypedArray()) { palette ->
+            val isSelected = state.zenithPalette == palette
+            FilterChip(
+              selected = isSelected,
+              onClick = { onSetZenithPalette(palette) },
+              label = { Text(AppLabels.Pro.paletteName(palette)) },
+              modifier = Modifier.testTag(AppTestTags.Pro.paletteChip(palette)),
+            )
+          }
+        }
       }
     }
   }
@@ -2545,6 +2679,25 @@ private fun GadgetsAndWidgetsSubScreen(
             )
           },
         )
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+        val slot3Profile = state.profiles.firstOrNull { it.id == state.quickTileSlot3ProfileId }
+          ?: state.profiles.getOrNull(2)
+          ?: state.profiles.firstOrNull()
+
+        ProfileQuickTileSlotConfigRow(
+          slotNumber = 3,
+          profiles = state.profiles,
+          selectedProfile = slot3Profile,
+          onSelectProfile = { profileId -> onSetQuickTileSlotProfileId(3, profileId) },
+          onAddTile = {
+            onRequestAddQuickTile(
+              QuickTileKind.PROFILE_SLOT_3,
+              slot3Profile?.name ?: AppLabels.Settings.quickProfileFallbackName(3),
+            )
+          },
+        )
       }
     }
 
@@ -3412,6 +3565,349 @@ private fun ProfileQuickTileSlotConfigRow(
           modifier = Modifier.testTag(AppTestTags.Settings.slotProfileChip(slotNumber, profile.id)),
         )
       }
+    }
+  }
+}
+
+@Composable
+internal fun ProUnlockSettingsSubScreen(
+  state: MainScreenUiState.Ready,
+  onLaunchProPurchase: () -> Unit,
+  onRestorePurchases: () -> Unit,
+  onSetZenithPalette: (ZenithAtmosphericPalette) -> Unit,
+  onSetAdminAutoRelockMinutes: (Int?) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .verticalScroll(rememberScrollState())
+      .padding(horizontal = 20.dp, vertical = 12.dp)
+      .testTag(AppTestTags.Pro.SUBSCREEN),
+    verticalArrangement = Arrangement.spacedBy(14.dp),
+  ) {
+    // 1. Status Banner
+    val isPro = state.isProUnlocked
+    val isPending = state.isPurchasePending
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag(AppTestTags.Pro.STATUS_BANNER),
+      shape = RoundedCornerShape(26.dp),
+      colors = CardDefaults.cardColors(
+        containerColor = when {
+          isPro -> MaterialTheme.colorScheme.primaryContainer
+          isPending -> MaterialTheme.colorScheme.tertiaryContainer
+          else -> MaterialTheme.colorScheme.surfaceContainerLow
+        },
+      ),
+      border = BorderStroke(
+        width = 1.dp,
+        color = when {
+          isPro -> MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+          isPending -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)
+          else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+        },
+      ),
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = when {
+              isPro -> Icons.Default.Verified
+              isPending -> Icons.Default.Schedule
+              else -> Icons.Default.WorkspacePremium
+            },
+            contentDescription = null,
+            tint = when {
+              isPro -> MaterialTheme.colorScheme.primary
+              isPending -> MaterialTheme.colorScheme.tertiary
+              else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.size(28.dp),
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = when {
+                isPro -> AppLabels.Pro.activeLifetimeBannerTitle
+                isPending -> AppLabels.Pro.pendingBannerTitle
+                else -> AppLabels.Pro.freePlanBannerTitle
+              },
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+            )
+            Text(
+              text = when {
+                isPro -> AppLabels.Pro.activeLifetimeBannerDesc
+                isPending -> AppLabels.Pro.pendingBannerDesc
+                else -> AppLabels.Pro.freePlanBannerDesc
+              },
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+
+        if (!isPro) {
+          Spacer(modifier = Modifier.height(4.dp))
+          Button(
+            onClick = onLaunchProPurchase,
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag(AppTestTags.Pro.PURCHASE_BUTTON),
+            shape = RoundedCornerShape(16.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.ShoppingCart,
+              contentDescription = null,
+              modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            val price = state.proFormattedPrice
+            Text(
+              text = AppLabels.Pro.purchaseButton(price),
+              fontWeight = FontWeight.SemiBold,
+            )
+          }
+        }
+      }
+    }
+
+    // 2. Restaurar Compras
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(22.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = AppLabels.Pro.restorePurchasesButton,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Text(
+            text = AppLabels.Pro.restorePurchasesHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        OutlinedButton(
+          onClick = onRestorePurchases,
+          modifier = Modifier.testTag(AppTestTags.Pro.RESTORE_PURCHASES_BUTTON),
+          shape = RoundedCornerShape(14.dp),
+        ) {
+          Text(AppLabels.Pro.restorePurchasesButton)
+        }
+      }
+    }
+
+    // 3. Paletas Atmosféricas ZENITH
+    SectionHeader(title = AppLabels.Pro.benefitPalettesTitle)
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(22.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Text(
+          text = AppLabels.Pro.benefitPalettesDesc,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          items(ZenithAtmosphericPalette.entries.toTypedArray()) { palette ->
+            val isSelected = state.zenithPalette == palette
+            FilterChip(
+              selected = isSelected,
+              onClick = { onSetZenithPalette(palette) },
+              label = { Text(AppLabels.Pro.paletteName(palette)) },
+              modifier = Modifier.testTag(AppTestTags.Pro.paletteChip(palette)),
+            )
+          }
+        }
+      }
+    }
+
+    // 4. Benefícios Detalhados
+    SectionHeader(title = AppLabels.Pro.title)
+    listOf(
+      Triple(Icons.Default.Style, AppLabels.Pro.benefitUnlimitedProfilesTitle, AppLabels.Pro.benefitUnlimitedProfilesDesc),
+      Triple(Icons.Default.Schedule, AppLabels.Pro.benefitUnlimitedSchedulesTitle, AppLabels.Pro.benefitUnlimitedSchedulesDesc),
+      Triple(Icons.Default.LocationOn, AppLabels.Pro.benefitUnlimitedLocationsTitle, AppLabels.Pro.benefitUnlimitedLocationsDesc),
+      Triple(Icons.Default.CalendarMonth, AppLabels.Pro.benefitUnlimitedCalendarTitle, AppLabels.Pro.benefitUnlimitedCalendarDesc),
+      Triple(Icons.Default.Widgets, AppLabels.Pro.benefitSlot3Title, AppLabels.Pro.benefitSlot3Desc),
+      Triple(Icons.Default.LockClock, AppLabels.Pro.benefitAutoRelockTitle, AppLabels.Pro.benefitAutoRelockDesc),
+      Triple(Icons.Default.Shield, AppLabels.Pro.benefitEthicalTitle, AppLabels.Pro.benefitEthicalDesc),
+    ).forEachIndexed { index, (icon, title, desc) ->
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = groupedCardShape(index = index, totalCount = 7),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(40.dp)
+              .clip(RoundedCornerShape(12.dp))
+              .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = icon,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(22.dp),
+            )
+          }
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = title,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+              text = desc,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ProUpsellBottomSheet(
+  state: MainScreenUiState.Ready,
+  onDismiss: () -> Unit,
+  onLaunchProPurchase: () -> Unit,
+  onRestorePurchases: () -> Unit,
+) {
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    sheetState = sheetState,
+    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+    modifier = Modifier.testTag(AppTestTags.Pro.UPSELL_SHEET),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 24.dp, vertical = 16.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+      Box(
+        modifier = Modifier
+          .size(56.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.WorkspacePremium,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(32.dp),
+        )
+      }
+
+      Text(
+        text = AppLabels.Pro.title,
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+      )
+
+      val message = state.proUpsellContextMessage ?: AppLabels.Pro.subtitle
+
+      Text(
+        text = message,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+      )
+
+      val price = state.proFormattedPrice
+
+      Button(
+        onClick = {
+          onDismiss()
+          onLaunchProPurchase()
+        },
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag(AppTestTags.Pro.PURCHASE_BUTTON),
+        shape = RoundedCornerShape(16.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Default.ShoppingCart,
+          contentDescription = null,
+          modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+          text = AppLabels.Pro.purchaseButton(price),
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        TextButton(
+          onClick = {
+            onDismiss()
+            onRestorePurchases()
+          },
+          modifier = Modifier.testTag(AppTestTags.Pro.RESTORE_PURCHASES_BUTTON),
+        ) {
+          Text(AppLabels.Pro.restorePurchasesButton)
+        }
+
+        TextButton(
+          onClick = onDismiss,
+          modifier = Modifier.testTag(AppTestTags.Pro.CLOSE_UPSELL_BUTTON),
+        ) {
+          Text(AppLabels.Common.cancel)
+        }
+      }
+
+      Spacer(modifier = Modifier.height(16.dp))
     }
   }
 }

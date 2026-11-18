@@ -56,6 +56,10 @@ enum class QuickTileKind(
     serviceClass = ProfileSlot2TileService::class.java,
     iconRes = R.drawable.ic_widget_style,
   ),
+  PROFILE_SLOT_3(
+    serviceClass = ProfileSlot3TileService::class.java,
+    iconRes = R.drawable.ic_widget_style,
+  ),
   QUICK_TIMER(
     serviceClass = QuickTimerTileService::class.java,
     iconRes = R.drawable.ic_qs_timer,
@@ -74,6 +78,7 @@ enum class QuickTileKind(
       MODE_SILENT -> AppLabels.Tiles.silentTitle
       PROFILE_SLOT_1 -> AppLabels.Tiles.slot1Title
       PROFILE_SLOT_2 -> AppLabels.Tiles.slot2Title
+      PROFILE_SLOT_3 -> AppLabels.Tiles.slot3Title
       QUICK_TIMER -> AppLabels.Tiles.quickTimerTitle
       MEDIA_MUTE -> AppLabels.Tiles.mediaMuteTitle
     }
@@ -86,6 +91,7 @@ enum class QuickTileKind(
       MODE_SILENT -> AppLabels.Tiles.silentDesc
       PROFILE_SLOT_1 -> AppLabels.Tiles.slot1Desc
       PROFILE_SLOT_2 -> AppLabels.Tiles.slot2Desc
+      PROFILE_SLOT_3 -> AppLabels.Tiles.slot3Desc
       QUICK_TIMER -> AppLabels.Tiles.quickTimerDesc
       MEDIA_MUTE -> AppLabels.Tiles.mediaMuteDesc
     }
@@ -400,7 +406,12 @@ abstract class BaseProfileSlotTileService(
   override suspend fun handleTileClick(app: ManageSoundApplication) {
     val prefs = app.container.preferencesDataSource.prefsFlow.first()
     val profiles = app.container.soundModeRepository.profilesStream.first()
-    val targetId = if (slotIndex == 1) prefs.quickTileSlot1ProfileId else prefs.quickTileSlot2ProfileId
+    val targetId = when (slotIndex) {
+      1 -> prefs.quickTileSlot1ProfileId
+      2 -> prefs.quickTileSlot2ProfileId
+      3 -> prefs.quickTileSlot3ProfileId
+      else -> prefs.quickTileSlot1ProfileId
+    }
     val targetProfile = profiles.firstOrNull { it.id == targetId } ?: profiles.firstOrNull() ?: return
     val targetState = targetProfile.resolvedSoundState
 
@@ -438,7 +449,12 @@ abstract class BaseProfileSlotTileService(
     val app = applicationContext as? ManageSoundApplication ?: return
     val prefs = app.container.preferencesDataSource.prefsFlow.first()
     val profiles = app.container.soundModeRepository.profilesStream.first()
-    val targetId = if (slotIndex == 1) prefs.quickTileSlot1ProfileId else prefs.quickTileSlot2ProfileId
+    val targetId = when (slotIndex) {
+      1 -> prefs.quickTileSlot1ProfileId
+      2 -> prefs.quickTileSlot2ProfileId
+      3 -> prefs.quickTileSlot3ProfileId
+      else -> prefs.quickTileSlot1ProfileId
+    }
     val targetProfile = profiles.firstOrNull { it.id == targetId } ?: profiles.firstOrNull()
 
     if (targetProfile == null) {
@@ -471,6 +487,7 @@ abstract class BaseProfileSlotTileService(
 
 class ProfileSlot1TileService : BaseProfileSlotTileService(slotIndex = 1)
 class ProfileSlot2TileService : BaseProfileSlotTileService(slotIndex = 2)
+class ProfileSlot3TileService : BaseProfileSlotTileService(slotIndex = 3)
 
 /**
  * Opção C — Bloco de Timer Rápido (30m -> 1h -> 2h -> Cancelar)

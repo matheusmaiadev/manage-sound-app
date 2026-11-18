@@ -36,9 +36,12 @@ class MainActivity : ComponentActivity() {
       val prefs by app.container.preferencesDataSource.prefsFlow.collectAsStateWithLifecycle(
         initialValue = PersistedSoundPrefs(),
       )
+      val entitlement by app.container.billingRepository.entitlementFlow.collectAsStateWithLifecycle()
       ManageSoundModeTheme(
         themeMode = prefs.themeMode,
         dynamicColor = prefs.useDynamicColor,
+        zenithPalette = prefs.zenithPalette,
+        isProUnlocked = entitlement.isProUnlocked,
       ) {
         Surface(
           modifier = Modifier.fillMaxSize(),

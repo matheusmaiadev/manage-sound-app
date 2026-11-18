@@ -1,11 +1,14 @@
 package com.managesoundmode.app.ui.main
 
+import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.managesoundmode.app.ManageSoundApplication
+import com.managesoundmode.app.data.billing.BillingRepository
+import com.managesoundmode.app.data.billing.FakeBillingRepository
 import com.managesoundmode.app.data.local.PersistedSoundPrefs
 import com.managesoundmode.app.data.repository.SoundModeRepository
 import com.managesoundmode.app.domain.model.AccessControlConfig
@@ -15,8 +18,12 @@ import com.managesoundmode.app.domain.model.BaseAudioMode
 import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.DeviceCalendarInfo
 import com.managesoundmode.app.domain.model.DeviceSoundSnapshot
+import com.managesoundmode.app.domain.model.FreemiumQuotas
 import com.managesoundmode.app.domain.model.LocationRule
+import com.managesoundmode.app.domain.model.ProEntitlementState
+import com.managesoundmode.app.domain.model.PurchaseResult
 import com.managesoundmode.app.domain.model.RestorePolicy
+import com.managesoundmode.app.domain.model.RestorePurchasesResult
 import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundMode
 import com.managesoundmode.app.domain.model.SoundProfile
@@ -28,6 +35,7 @@ import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.domain.model.Weekday
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 import com.managesoundmode.app.system.ActiveVolumePreview
 import com.managesoundmode.app.system.FakeVolumePreviewPlayer
 import com.managesoundmode.app.system.VolumePreviewPlayer
@@ -35,6 +43,8 @@ import com.managesoundmode.app.system.VolumePreviewScope
 import com.managesoundmode.app.ui.common.AppLabels
 import com.managesoundmode.app.ui.common.AppLanguage
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +94,15 @@ sealed interface MainScreenUiState {
     val persistentQuickBarEnabled: Boolean = true,
     val quickTileSlot1ProfileId: String = "preset_work_high",
     val quickTileSlot2ProfileId: String = "preset_sleep",
+    val quickTileSlot3ProfileId: String = "preset_home",
+    val zenithPalette: ZenithAtmosphericPalette = ZenithAtmosphericPalette.BOREAL_CLASSIC,
+    val adminAutoRelockMinutes: Int? = null,
+    val isProUnlocked: Boolean = false,
+    val isPurchasePending: Boolean = false,
+    val proFormattedPrice: String? = null,
+    val proUnlockedAtEpochMillis: Long? = null,
+    val showProUpsellSheet: Boolean = false,
+    val proUpsellContextMessage: String? = null,
     val appLanguageCode: String = "PT_BR",
     val automationsPaused: Boolean = false,
     val hapticFeedbackEnabled: Boolean = true,
@@ -144,18 +163,25 @@ sealed interface MainScreenUiState {
 class MainScreenViewModel(
   private val repository: SoundModeRepository,
   private val previewPlayer: VolumePreviewPlayer = FakeVolumePreviewPlayer(),
+  private val billingRepository: BillingRepository = FakeBillingRepository(),
 ) : ViewModel() {
 
   private data class TransientUiOverlay(
     val feedbackMessage: String?,
     val showWritePrompt: Boolean,
     val activePreview: ActiveVolumePreview?,
+    val entitlement: ProEntitlementState,
+    val showProUpsellSheet: Boolean,
+    val proUpsellMessage: String?,
   )
 
   private val feedbackMessage = MutableStateFlow<String?>(null)
   private val writeSettingsPromptRequested = MutableStateFlow(false)
+  private val showProUpsellSheet = MutableStateFlow(false)
+  private val proUpsellMessage = MutableStateFlow<String?>(null)
   private val availableCalendarsState = MutableStateFlow<List<DeviceCalendarInfo>>(emptyList())
   private val latchedMostUsedStreams = AtomicReference<List<VolumeStreamType>?>(null)
+  private var adminAutoRelockJob: Job? = null
 
   init {
     loadVisibleCalendars()
@@ -170,14 +196,20 @@ class MainScreenViewModel(
   }
 
   private val transientOverlayFlow = combine(
-    feedbackMessage,
-    writeSettingsPromptRequested,
-    previewPlayer.previewState,
-  ) { message, showWritePrompt, activePreview ->
+    combine(feedbackMessage, writeSettingsPromptRequested, previewPlayer.previewState) { msg, prompt, prev ->
+      Triple(msg, prompt, prev)
+    },
+    combine(billingRepository.entitlementFlow, showProUpsellSheet, proUpsellMessage) { ent, show, upsellMsg ->
+      Triple(ent, show, upsellMsg)
+    },
+  ) { (message, showWritePrompt, activePreview), (entitlement, showUpsell, upsellMsg) ->
     TransientUiOverlay(
       feedbackMessage = message,
       showWritePrompt = showWritePrompt,
       activePreview = activePreview,
+      entitlement = entitlement,
+      showProUpsellSheet = showUpsell,
+      proUpsellMessage = upsellMsg,
     )
   }
 
@@ -247,6 +279,15 @@ class MainScreenViewModel(
       persistentQuickBarEnabled = prefs.persistentQuickBarEnabled,
       quickTileSlot1ProfileId = prefs.quickTileSlot1ProfileId,
       quickTileSlot2ProfileId = prefs.quickTileSlot2ProfileId,
+      quickTileSlot3ProfileId = prefs.quickTileSlot3ProfileId,
+      zenithPalette = prefs.zenithPalette,
+      adminAutoRelockMinutes = prefs.adminAutoRelockMinutes,
+      isProUnlocked = overlay.entitlement.isProUnlocked,
+      isPurchasePending = overlay.entitlement.isPurchasePending,
+      proFormattedPrice = overlay.entitlement.formattedPrice,
+      proUnlockedAtEpochMillis = overlay.entitlement.unlockedAtEpochMillis,
+      showProUpsellSheet = overlay.showProUpsellSheet,
+      proUpsellContextMessage = overlay.proUpsellMessage,
       appLanguageCode = prefs.appLanguageCode,
       automationsPaused = prefs.automationsPaused,
       hapticFeedbackEnabled = prefs.hapticFeedbackEnabled,
@@ -312,6 +353,79 @@ class MainScreenViewModel(
       if (granted) {
         repository.syncExternalSurfacesNow()
       }
+    }
+  }
+
+  fun triggerProUpsell(message: String) {
+    proUpsellMessage.value = message
+    showProUpsellSheet.value = true
+  }
+
+  fun dismissProUpsellSheet() {
+    showProUpsellSheet.value = false
+    proUpsellMessage.value = null
+  }
+
+  fun launchProPurchase(activity: Activity) {
+    viewModelScope.launch {
+      when (val result = billingRepository.launchProPurchaseFlow(activity)) {
+        is PurchaseResult.Purchased -> {
+          feedbackMessage.value = AppLabels.Pro.purchaseSuccessMessage
+          dismissProUpsellSheet()
+        }
+        is PurchaseResult.Pending -> {
+          feedbackMessage.value = AppLabels.Pro.purchasePendingMessage
+        }
+        is PurchaseResult.AlreadyOwned -> {
+          feedbackMessage.value = AppLabels.Pro.alreadyOwnedMessage
+          dismissProUpsellSheet()
+        }
+        is PurchaseResult.UserCancelled -> {
+          // Usuário cancelou intencionalmente o fluxo de faturamento da Google Play
+        }
+        is PurchaseResult.Error -> {
+          feedbackMessage.value = AppLabels.Pro.purchaseErrorMessage(result.debugMessage)
+        }
+      }
+    }
+  }
+
+  fun restorePurchases() {
+    viewModelScope.launch {
+      when (val result = billingRepository.restorePurchases()) {
+        is RestorePurchasesResult.RestoredPro -> {
+          feedbackMessage.value = AppLabels.Pro.restoreSuccessMessage
+          dismissProUpsellSheet()
+        }
+        is RestorePurchasesResult.NoActivePurchaseFound -> {
+          feedbackMessage.value = AppLabels.Pro.noPurchaseFoundMessage
+        }
+        is RestorePurchasesResult.Error -> {
+          feedbackMessage.value = AppLabels.Pro.purchaseErrorMessage(result.debugMessage)
+        }
+      }
+    }
+  }
+
+  fun onSetZenithPalette(palette: ZenithAtmosphericPalette) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      if (palette.isPro && !billingRepository.entitlementFlow.value.isProUnlocked) {
+        triggerProUpsell(AppLabels.Pro.upsellPalettesFeature)
+        return@launch
+      }
+      repository.setZenithPalette(palette)
+    }
+  }
+
+  fun onSetAdminAutoRelockMinutes(minutes: Int?) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      if (minutes != null && minutes > 0 && !billingRepository.entitlementFlow.value.isProUnlocked) {
+        triggerProUpsell(AppLabels.Pro.upsellAutoRelockFeature)
+        return@launch
+      }
+      repository.setAdminAutoRelockMinutes(minutes)
     }
   }
 
@@ -713,6 +827,12 @@ class MainScreenViewModel(
   fun onSaveCurrentAsProfile(name: String, description: String) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_PROFILES)) return@launch
+      val currentProfiles = repository.preferencesStream.first().customProfiles
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isPro && currentProfiles.size >= FreemiumQuotas.FREE_MAX_CUSTOM_PROFILES) {
+        triggerProUpsell(AppLabels.Pro.upsellProfilesQuota)
+        return@launch
+      }
       repository.saveCurrentAsProfile(name, description)
         .onSuccess { profile ->
           feedbackMessage.value = "Perfil '${profile.name}' salvo com sucesso"
@@ -730,6 +850,13 @@ class MainScreenViewModel(
   ) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_PROFILES)) return@launch
+      val currentProfiles = repository.preferencesStream.first().customProfiles
+      val isExisting = currentProfiles.any { it.id == profile.id }
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isExisting && !isPro && currentProfiles.size >= FreemiumQuotas.FREE_MAX_CUSTOM_PROFILES) {
+        triggerProUpsell(AppLabels.Pro.upsellProfilesQuota)
+        return@launch
+      }
       if (applyImmediately) {
         onStopVolumePreview()
       }
@@ -762,6 +889,13 @@ class MainScreenViewModel(
   fun onUpsertScheduleRule(rule: ScheduleRule, showFeedback: Boolean = true) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      val currentRules = repository.preferencesStream.first().scheduleRules
+      val isExisting = currentRules.any { it.id == rule.id }
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isExisting && !isPro && currentRules.size >= FreemiumQuotas.FREE_MAX_SCHEDULE_RULES) {
+        triggerProUpsell(AppLabels.Pro.upsellSchedulesQuota)
+        return@launch
+      }
       repository.upsertScheduleRule(rule)
         .onSuccess {
           if (showFeedback) {
@@ -824,6 +958,13 @@ class MainScreenViewModel(
   fun onUpsertCalendarRule(rule: CalendarRule, showFeedback: Boolean = true) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      val currentRules = repository.preferencesStream.first().calendarRules
+      val isExisting = currentRules.any { it.id == rule.id }
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isExisting && !isPro && currentRules.size >= FreemiumQuotas.FREE_MAX_CALENDAR_RULES) {
+        triggerProUpsell(AppLabels.Pro.upsellCalendarQuota)
+        return@launch
+      }
       repository.upsertCalendarRule(rule)
         .onSuccess {
           if (showFeedback) {
@@ -860,6 +1001,12 @@ class MainScreenViewModel(
   fun onDuplicateCalendarRule(rule: CalendarRule) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      val currentRules = repository.preferencesStream.first().calendarRules
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isPro && currentRules.size >= FreemiumQuotas.FREE_MAX_CALENDAR_RULES) {
+        triggerProUpsell(AppLabels.Pro.upsellCalendarQuota)
+        return@launch
+      }
       val duplicated = rule.copy(
         id = "cal_${System.currentTimeMillis()}",
         name = "${rule.name} (Cópia)",
@@ -874,6 +1021,13 @@ class MainScreenViewModel(
   fun onUpsertLocationRule(rule: LocationRule, showFeedback: Boolean = true) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_LOCATIONS)) return@launch
+      val currentRules = repository.preferencesStream.first().locationRules
+      val isExisting = currentRules.any { it.id == rule.id }
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isExisting && !isPro && currentRules.size >= FreemiumQuotas.FREE_MAX_LOCATION_RULES) {
+        triggerProUpsell(AppLabels.Pro.upsellLocationsQuota)
+        return@launch
+      }
       repository.upsertLocationRule(rule)
         .onSuccess {
           if (showFeedback) {
@@ -1002,6 +1156,10 @@ class MainScreenViewModel(
   fun onSetQuickTileSlotProfileId(slotIndex: Int, profileId: String) {
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.ACCESS_SETTINGS)) return@launch
+      if (slotIndex == 3 && !billingRepository.entitlementFlow.value.isProUnlocked) {
+        triggerProUpsell(AppLabels.Pro.upsellSlot3Feature)
+        return@launch
+      }
       repository.setQuickTileSlotProfileId(slotIndex, profileId)
         .onSuccess {
           val profiles = (uiState.value as? MainScreenUiState.Ready)?.profiles
@@ -1132,13 +1290,36 @@ class MainScreenViewModel(
     viewModelScope.launch {
       val current = currentAccessControl()
       if (current.verifyPin(inputPin)) {
+        val previousRole = current.activeRole
         repository.setAccessControlConfig(current.withRole(AppAccessRole.ADMIN))
           .onSuccess {
             feedbackMessage.value = AppLabels.AccessControl.unlockedAsAdminMessage
             onSuccess()
+            scheduleAdminAutoRelockIfNeeded(previousRole)
           }
       } else {
         feedbackMessage.value = AppLabels.AccessControl.pinChallengeWrongError
+      }
+    }
+  }
+
+  private fun scheduleAdminAutoRelockIfNeeded(previousRole: AppAccessRole) {
+    adminAutoRelockJob?.cancel()
+    val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+    if (!isPro) return
+    viewModelScope.launch {
+      val prefs = repository.preferencesStream.first()
+      val minutes = prefs.adminAutoRelockMinutes
+      if (minutes != null && minutes > 0) {
+        adminAutoRelockJob = viewModelScope.launch {
+          delay(minutes * 60_000L)
+          val latest = currentAccessControl()
+          if (latest.activeRole == AppAccessRole.ADMIN) {
+            val relockedRole = if (previousRole != AppAccessRole.ADMIN) previousRole else AppAccessRole.VIEWER
+            repository.setAccessControlConfig(latest.withRole(relockedRole))
+            feedbackMessage.value = AppLabels.AccessControl.adminAutoRelockedMessage
+          }
+        }
       }
     }
   }
@@ -1194,13 +1375,19 @@ class MainScreenViewModel(
   }
 
   fun onDuplicateProfile(profile: SoundProfile) {
-    val duplicated = profile.copy(
-      id = "custom_${System.currentTimeMillis()}",
-      name = "${profile.name} (Cópia)",
-      isPreset = false,
-    )
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_PROFILES)) return@launch
+      val currentProfiles = repository.preferencesStream.first().customProfiles
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isPro && currentProfiles.size >= FreemiumQuotas.FREE_MAX_CUSTOM_PROFILES) {
+        triggerProUpsell(AppLabels.Pro.upsellProfilesQuota)
+        return@launch
+      }
+      val duplicated = profile.copy(
+        id = "custom_${System.currentTimeMillis()}",
+        name = "${profile.name} (Cópia)",
+        isPreset = false,
+      )
       repository.upsertProfile(duplicated, applyImmediately = false)
         .onSuccess {
           feedbackMessage.value = "Perfil '${duplicated.name}' criado"
@@ -1209,12 +1396,18 @@ class MainScreenViewModel(
   }
 
   fun onDuplicateScheduleRule(rule: ScheduleRule) {
-    val duplicated = rule.copy(
-      id = "sched_${System.currentTimeMillis()}",
-      name = "${rule.name} (Cópia)",
-    )
     viewModelScope.launch {
       if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      val currentRules = repository.preferencesStream.first().scheduleRules
+      val isPro = billingRepository.entitlementFlow.value.isProUnlocked
+      if (!isPro && currentRules.size >= FreemiumQuotas.FREE_MAX_SCHEDULE_RULES) {
+        triggerProUpsell(AppLabels.Pro.upsellSchedulesQuota)
+        return@launch
+      }
+      val duplicated = rule.copy(
+        id = "sched_${System.currentTimeMillis()}",
+        name = "${rule.name} (Cópia)",
+      )
       repository.upsertScheduleRule(duplicated)
         .onSuccess {
           feedbackMessage.value = "Horário '${duplicated.name}' duplicado"
@@ -1269,6 +1462,7 @@ class MainScreenViewModel(
         MainScreenViewModel(
           repository = application.container.soundModeRepository,
           previewPlayer = application.container.volumePreviewPlayer,
+          billingRepository = application.container.billingRepository,
         )
       }
     }

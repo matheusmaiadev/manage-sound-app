@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import java.security.MessageDigest
 import java.security.SecureRandom
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Proteção criptográfica por instalação contra Intent Spoofing em componentes exportados.
@@ -55,4 +57,27 @@ object InternalIntentSecurity {
       expected.toByteArray(Charsets.UTF_8),
     )
   }
+
+  fun computeHmacSha256(secret: String, message: String): String {
+    val mac = Mac.getInstance("HmacSHA256")
+    val keySpec = SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256")
+    mac.init(keySpec)
+    val hmacBytes = mac.doFinal(message.toByteArray(Charsets.UTF_8))
+    return hmacBytes.joinToString("") { "%02x".format(it) }
+  }
+
+  fun verifyHmacSha256(secret: String, message: String, expectedHex: String): Boolean {
+    if (expectedHex.isBlank()) return false
+    val computed = computeHmacSha256(secret, message)
+    return MessageDigest.isEqual(
+      computed.lowercase().toByteArray(Charsets.UTF_8),
+      expectedHex.trim().lowercase().toByteArray(Charsets.UTF_8),
+    )
+  }
+
+  fun computeHmacSha256(context: Context, message: String): String =
+    computeHmacSha256(getOrCreateToken(context), message)
+
+  fun verifyHmacSha256(context: Context, message: String, expectedHex: String): Boolean =
+    verifyHmacSha256(getOrCreateToken(context), message, expectedHex)
 }

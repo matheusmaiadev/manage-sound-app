@@ -24,6 +24,7 @@ import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.VolumeStreamType
 import com.managesoundmode.app.domain.model.VolumeStreams
+import com.managesoundmode.app.domain.model.Weekday
 import com.managesoundmode.app.system.BackgroundGeofenceManager
 import com.managesoundmode.app.system.FakeVolumePreviewPlayer
 import com.managesoundmode.app.system.SystemZenRuleManager
@@ -59,6 +60,7 @@ class MainScreenViewModelTest {
   private val testDispatcher = UnconfinedTestDispatcher()
   private lateinit var fakeSystemController: FakeSoundSystemController
   private lateinit var fakePreferences: FakeSoundPreferencesDataSource
+  private lateinit var fakeBillingRepository: com.managesoundmode.app.data.billing.FakeBillingRepository
   private lateinit var repository: DefaultSoundModeRepository
   private lateinit var viewModel: MainScreenViewModel
 
@@ -67,11 +69,15 @@ class MainScreenViewModelTest {
     Dispatchers.setMain(testDispatcher)
     fakeSystemController = FakeSoundSystemController()
     fakePreferences = FakeSoundPreferencesDataSource()
+    fakeBillingRepository = com.managesoundmode.app.data.billing.FakeBillingRepository()
     repository = DefaultSoundModeRepository(
       systemController = fakeSystemController,
       preferencesDataSource = fakePreferences,
     )
-    viewModel = MainScreenViewModel(repository)
+    viewModel = MainScreenViewModel(
+      repository = repository,
+      billingRepository = fakeBillingRepository,
+    )
   }
 
   @After
@@ -1679,7 +1685,15 @@ class MainScreenViewModelTest {
     val stateAfterToggle = viewModel.uiState.value as MainScreenUiState.Ready
     assertFalse(stateAfterToggle.calendarRules[0].enabled)
 
-    // Duplicate
+    // Duplicate sem Pro -> cota gratuita de 1 regra de calendário atingida
+    viewModel.onDuplicateCalendarRule(stateAfterToggle.calendarRules[0])
+    val stateAfterBlockedDuplicate = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(1, stateAfterBlockedDuplicate.calendarRules.size)
+    assertTrue(stateAfterBlockedDuplicate.showProUpsellSheet)
+    viewModel.dismissProUpsellSheet()
+
+    // Desbloqueia Pro e duplica com sucesso
+    fakeBillingRepository.setProUnlocked(true)
     viewModel.onDuplicateCalendarRule(stateAfterToggle.calendarRules[0])
     val stateAfterDuplicate = viewModel.uiState.value as MainScreenUiState.Ready
     assertEquals(2, stateAfterDuplicate.calendarRules.size)
@@ -1723,6 +1737,209 @@ class MainScreenViewModelTest {
       AppLabels.AccessControl.permissionDeniedMessage(AppPermission.MANAGE_SCHEDULES),
       stateWithFeedback.statusMessage,
     )
+  }
+
+  @Test
+  fun customProfiles_freemiumQuotaEnforced_andGrandfatheringAllowsEditingExisting() = runTest {
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    // Cria até 5 perfis customizados com sucesso
+    for (i in 1..5) {
+      val profile = SoundProfile(
+        id = "custom_$i",
+        name = "Custom $i",
+        description = "Test profile $i",
+        streams = VolumeStreams(),
+        isPreset = false,
+      )
+      viewModel.onUpsertProfile(profile, applyImmediately = false, showFeedback = false)
+    }
+
+    val readyWith5 = viewModel.uiState.value as MainScreenUiState.Ready
+    val customCount = readyWith5.profiles.count { !it.isPreset }
+    assertEquals(5, customCount)
+    assertFalse(readyWith5.showProUpsellSheet)
+
+    // Tentar criar o 6º perfil customizado no plano Free é bloqueado pelo Upsell Sheet
+    val profile6 = SoundProfile(
+      id = "custom_6",
+      name = "Custom 6",
+      description = "Test profile 6",
+      streams = VolumeStreams(),
+      isPreset = false,
+    )
+    viewModel.onUpsertProfile(profile6, applyImmediately = false, showFeedback = false)
+    val stateAfterBlocked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(5, stateAfterBlocked.profiles.count { !it.isPreset })
+    assertTrue(stateAfterBlocked.showProUpsellSheet)
+    viewModel.dismissProUpsellSheet()
+
+    // Grandfathering ético: Editar um perfil já existente NUNCA é bloqueado
+    val editedProfile1 = SoundProfile(
+      id = "custom_1",
+      name = "Custom 1 Renamed",
+      description = "Edited description",
+      streams = VolumeStreams(),
+      isPreset = false,
+    )
+    viewModel.onUpsertProfile(editedProfile1, applyImmediately = false, showFeedback = false)
+    val stateAfterEdit = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(5, stateAfterEdit.profiles.count { !it.isPreset })
+    assertEquals("Custom 1 Renamed", stateAfterEdit.profiles.first { it.id == "custom_1" }.name)
+    assertFalse(stateAfterEdit.showProUpsellSheet)
+
+    // Desbloqueia Pro: Agora a criação do 6º perfil customizado passa normalmente
+    fakeBillingRepository.setProUnlocked(true)
+    viewModel.onUpsertProfile(profile6, applyImmediately = false, showFeedback = false)
+    val stateAfterPro = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(6, stateAfterPro.profiles.count { !it.isPreset })
+    assertNotNull(stateAfterPro.profiles.firstOrNull { it.id == "custom_6" })
+  }
+
+  @Test
+  fun scheduleRules_freemiumQuotaEnforced_andProUnlocksUnlimited() = runTest {
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+    fakePreferences.clearSchedules()
+
+    // Adiciona 3 regras de horário (cota máxima gratuita)
+    for (i in 1..3) {
+      val rule = ScheduleRule(
+        id = "sched_$i",
+        name = "Schedule $i",
+        daysOfWeek = Weekday.weekdays,
+        startHour = 8,
+        startMinute = 0,
+        endHour = 17,
+        endMinute = 0,
+        targetProfileId = "preset_work_high",
+      )
+      viewModel.onUpsertScheduleRule(rule, showFeedback = false)
+    }
+
+    val state3 = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(3, state3.scheduleRules.size)
+    assertFalse(state3.showProUpsellSheet)
+
+    // 4ª regra é barrada
+    val rule4 = ScheduleRule(
+      id = "sched_4",
+      name = "Schedule 4",
+      daysOfWeek = Weekday.weekdays,
+      startHour = 19,
+      startMinute = 0,
+      endHour = 22,
+      endMinute = 0,
+      targetProfileId = "preset_home",
+    )
+    viewModel.onUpsertScheduleRule(rule4, showFeedback = false)
+    val stateBlocked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(3, stateBlocked.scheduleRules.size)
+    assertTrue(stateBlocked.showProUpsellSheet)
+    viewModel.dismissProUpsellSheet()
+
+    // Com Pro desbloqueado, regra 4 é criada
+    fakeBillingRepository.setProUnlocked(true)
+    viewModel.onUpsertScheduleRule(rule4, showFeedback = false)
+    val statePro = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(4, statePro.scheduleRules.size)
+  }
+
+  @Test
+  fun locationRules_freemiumQuotaEnforced_andProUnlocksUnlimited() = runTest {
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    // Default locations já têm algumas regras, vamos sobrescrever limpando
+    val initialReady = viewModel.uiState.value as MainScreenUiState.Ready
+    for (loc in initialReady.locationRules) {
+      viewModel.onDeleteLocationRule(loc.id)
+    }
+
+    for (i in 1..3) {
+      val loc = LocationRule(
+        id = "loc_$i",
+        name = "Loc $i",
+        latitude = -23.55 + i * 0.01,
+        longitude = -46.63 + i * 0.01,
+        radiusMeters = 150,
+        targetProfileId = "preset_work_high",
+      )
+      viewModel.onUpsertLocationRule(loc, showFeedback = false)
+    }
+
+    val state3 = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(3, state3.locationRules.size)
+
+    // 4ª cerca é barrada
+    val loc4 = LocationRule(
+      id = "loc_4",
+      name = "Loc 4",
+      latitude = -23.50,
+      longitude = -46.60,
+      radiusMeters = 200,
+      targetProfileId = "preset_home",
+    )
+    viewModel.onUpsertLocationRule(loc4, showFeedback = false)
+    val stateBlocked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(3, stateBlocked.locationRules.size)
+    assertTrue(stateBlocked.showProUpsellSheet)
+    viewModel.dismissProUpsellSheet()
+
+    // Com Pro, a 4ª cerca é salva
+    fakeBillingRepository.setProUnlocked(true)
+    viewModel.onUpsertLocationRule(loc4, showFeedback = false)
+    val statePro = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(4, statePro.locationRules.size)
+  }
+
+  @Test
+  fun proPalettes_quickTileSlot3_andAdminAutoRelock_areGatedWhenFree() = runTest {
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    // 1. Paleta Pro bloqueada no plano Free
+    viewModel.onSetZenithPalette(com.managesoundmode.app.domain.model.ZenithAtmosphericPalette.EMERALD_AURORA)
+    val statePaletteBlocked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(com.managesoundmode.app.domain.model.ZenithAtmosphericPalette.BOREAL_CLASSIC, statePaletteBlocked.zenithPalette)
+    assertTrue(statePaletteBlocked.showProUpsellSheet)
+    viewModel.dismissProUpsellSheet()
+
+    // 2. Slot 3 bloqueado no plano Free
+    viewModel.onSetQuickTileSlotProfileId(3, "preset_sleep")
+    val stateSlotBlocked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertTrue(stateSlotBlocked.showProUpsellSheet)
+    viewModel.dismissProUpsellSheet()
+
+    // 3. Auto-Relock bloqueado no plano Free
+    viewModel.onSetAdminAutoRelockMinutes(5)
+    val stateRelockBlocked = viewModel.uiState.value as MainScreenUiState.Ready
+    assertNull(stateRelockBlocked.adminAutoRelockMinutes)
+    assertTrue(stateRelockBlocked.showProUpsellSheet)
+    viewModel.dismissProUpsellSheet()
+
+    // Desbloqueia Pro
+    fakeBillingRepository.setProUnlocked(true)
+
+    // Paleta Pro funciona
+    viewModel.onSetZenithPalette(com.managesoundmode.app.domain.model.ZenithAtmosphericPalette.EMERALD_AURORA)
+    val statePaletteAllowed = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(com.managesoundmode.app.domain.model.ZenithAtmosphericPalette.EMERALD_AURORA, statePaletteAllowed.zenithPalette)
+
+    // Slot 3 funciona
+    viewModel.onSetQuickTileSlotProfileId(3, "preset_sleep")
+    val stateSlotAllowed = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals("preset_sleep", stateSlotAllowed.quickTileSlot3ProfileId)
+
+    // Auto-Relock funciona
+    viewModel.onSetAdminAutoRelockMinutes(15)
+    val stateRelockAllowed = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(15, stateRelockAllowed.adminAutoRelockMinutes)
   }
 }
 
@@ -1947,6 +2164,10 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
     state.value = state.value.copy(quickTileSlot2ProfileId = profileId)
   }
 
+  override suspend fun setQuickTileSlot3ProfileId(profileId: String) {
+    state.value = state.value.copy(quickTileSlot3ProfileId = profileId)
+  }
+
   override suspend fun setSavedMediaBeforeMute(percent: Int?) {
     state.value = state.value.copy(savedMediaBeforeMute = percent)
   }
@@ -2027,6 +2248,18 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
 
   override suspend fun setSilentPreAdjustEnabled(enabled: Boolean) {
     state.value = state.value.copy(silentPreAdjustEnabled = enabled)
+  }
+
+  override suspend fun setZenithPalette(palette: com.managesoundmode.app.domain.model.ZenithAtmosphericPalette) {
+    state.value = state.value.copy(zenithPalette = palette)
+  }
+
+  override suspend fun setAdminAutoRelockMinutes(minutes: Int?) {
+    state.value = state.value.copy(adminAutoRelockMinutes = minutes)
+  }
+
+  override suspend fun setCachedProEntitlement(cached: com.managesoundmode.app.domain.model.CachedProEntitlement?) {
+    state.value = state.value.copy(cachedProEntitlement = cached)
   }
 
   override suspend fun setPendingSoundStreams(pending: Map<VolumeStreamType, Int>) {

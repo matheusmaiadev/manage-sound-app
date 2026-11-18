@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.managesoundmode.app.domain.model.AccessControlConfig
+import com.managesoundmode.app.domain.model.CachedProEntitlement
 import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
@@ -22,6 +23,7 @@ import com.managesoundmode.app.domain.model.ThemeMode
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
 import com.managesoundmode.app.domain.model.VolumeStreamType
+import com.managesoundmode.app.domain.model.ZenithAtmosphericPalette
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -58,6 +60,9 @@ data class SoundPrefsBackupPayload(
   val persistentQuickBarEnabled: Boolean = true,
   val quickTileSlot1ProfileId: String = "preset_work_high",
   val quickTileSlot2ProfileId: String = "preset_sleep",
+  val quickTileSlot3ProfileId: String = "preset_home",
+  val zenithPalette: ZenithAtmosphericPalette = ZenithAtmosphericPalette.BOREAL_CLASSIC,
+  val adminAutoRelockMinutes: Int? = null,
   val accessControlConfig: AccessControlConfig = AccessControlConfig(),
   val systemZenRulesEnabled: Boolean = true,
   val soundVibrateEnabledFallback: Boolean = true,
@@ -97,6 +102,10 @@ data class PersistedSoundPrefs(
   val persistentQuickBarEnabled: Boolean = true,
   val quickTileSlot1ProfileId: String = "preset_work_high",
   val quickTileSlot2ProfileId: String = "preset_sleep",
+  val quickTileSlot3ProfileId: String = "preset_home",
+  val zenithPalette: ZenithAtmosphericPalette = ZenithAtmosphericPalette.BOREAL_CLASSIC,
+  val adminAutoRelockMinutes: Int? = null,
+  val cachedProEntitlement: CachedProEntitlement? = null,
   val savedMediaBeforeMute: Int? = null,
   val appLanguageCode: String = "PT_BR",
   val automationsPaused: Boolean = false,
@@ -148,6 +157,10 @@ interface SoundPreferencesDataSource {
   suspend fun setPersistentQuickBarEnabled(enabled: Boolean) {}
   suspend fun setQuickTileSlot1ProfileId(profileId: String) {}
   suspend fun setQuickTileSlot2ProfileId(profileId: String) {}
+  suspend fun setQuickTileSlot3ProfileId(profileId: String) {}
+  suspend fun setZenithPalette(palette: ZenithAtmosphericPalette) {}
+  suspend fun setAdminAutoRelockMinutes(minutes: Int?) {}
+  suspend fun setCachedProEntitlement(cached: CachedProEntitlement?) {}
   suspend fun setSavedMediaBeforeMute(percent: Int?) {}
   suspend fun setAppLanguageCode(languageCode: String) {}
   suspend fun setAutomationsPaused(paused: Boolean) {}
@@ -283,6 +296,16 @@ class DataStoreSoundPreferencesDataSource(
             .getOrDefault(emptyMap())
         } ?: emptyMap()
 
+        val quickTileSlot3ProfileId = prefs[KEY_QUICK_TILE_SLOT3_PROFILE_ID] ?: "preset_home"
+        val zenithPalette = prefs[KEY_ZENITH_PALETTE]?.let { raw ->
+          runCatching { ZenithAtmosphericPalette.valueOf(raw) }
+            .getOrDefault(ZenithAtmosphericPalette.BOREAL_CLASSIC)
+        } ?: ZenithAtmosphericPalette.BOREAL_CLASSIC
+        val adminAutoRelockMinutes = prefs[KEY_ADMIN_AUTO_RELOCK_MINUTES]
+        val cachedProEntitlement = prefs[KEY_PRO_ENTITLEMENT_CACHE_JSON]?.let { raw ->
+          runCatching { json.decodeFromString<CachedProEntitlement>(raw) }.getOrNull()
+        }
+
         PersistedSoundPrefs(
           schemaVersion = prefs[KEY_SCHEMA_VERSION] ?: CURRENT_SCHEMA_VERSION,
           activeProfileId = activeProfileId,
@@ -308,6 +331,10 @@ class DataStoreSoundPreferencesDataSource(
           persistentQuickBarEnabled = prefs[KEY_PERSISTENT_QUICK_BAR] ?: true,
           quickTileSlot1ProfileId = prefs[KEY_QUICK_TILE_SLOT1_PROFILE_ID] ?: "preset_work_high",
           quickTileSlot2ProfileId = prefs[KEY_QUICK_TILE_SLOT2_PROFILE_ID] ?: "preset_sleep",
+          quickTileSlot3ProfileId = quickTileSlot3ProfileId,
+          zenithPalette = zenithPalette,
+          adminAutoRelockMinutes = adminAutoRelockMinutes,
+          cachedProEntitlement = cachedProEntitlement,
           savedMediaBeforeMute = prefs[KEY_SAVED_MEDIA_BEFORE_MUTE],
           appLanguageCode = prefs[KEY_APP_LANGUAGE_CODE] ?: "PT_BR",
           automationsPaused = prefs[KEY_AUTOMATIONS_PAUSED] ?: false,
@@ -589,6 +616,38 @@ class DataStoreSoundPreferencesDataSource(
     }
   }
 
+  override suspend fun setQuickTileSlot3ProfileId(profileId: String) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_QUICK_TILE_SLOT3_PROFILE_ID] = profileId
+    }
+  }
+
+  override suspend fun setZenithPalette(palette: ZenithAtmosphericPalette) {
+    context.soundDataStore.edit { prefs ->
+      prefs[KEY_ZENITH_PALETTE] = palette.name
+    }
+  }
+
+  override suspend fun setAdminAutoRelockMinutes(minutes: Int?) {
+    context.soundDataStore.edit { prefs ->
+      if (minutes == null || minutes <= 0) {
+        prefs.remove(KEY_ADMIN_AUTO_RELOCK_MINUTES)
+      } else {
+        prefs[KEY_ADMIN_AUTO_RELOCK_MINUTES] = minutes
+      }
+    }
+  }
+
+  override suspend fun setCachedProEntitlement(cached: CachedProEntitlement?) {
+    context.soundDataStore.edit { prefs ->
+      if (cached == null) {
+        prefs.remove(KEY_PRO_ENTITLEMENT_CACHE_JSON)
+      } else {
+        prefs[KEY_PRO_ENTITLEMENT_CACHE_JSON] = json.encodeToString(cached)
+      }
+    }
+  }
+
   override suspend fun setSavedMediaBeforeMute(percent: Int?) {
     context.soundDataStore.edit { prefs ->
       if (percent == null) {
@@ -749,6 +808,9 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_DEFAULT_TIMER_MINUTES] = 30
       prefs[KEY_QUICK_TILE_SLOT1_PROFILE_ID] = "preset_work_high"
       prefs[KEY_QUICK_TILE_SLOT2_PROFILE_ID] = "preset_sleep"
+      prefs[KEY_QUICK_TILE_SLOT3_PROFILE_ID] = "preset_home"
+      prefs[KEY_ZENITH_PALETTE] = ZenithAtmosphericPalette.BOREAL_CLASSIC.name
+      prefs.remove(KEY_ADMIN_AUTO_RELOCK_MINUTES)
       prefs.remove(KEY_ACCESS_CONTROL_JSON)
       prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] = true
       prefs[KEY_SOUND_VIBRATE_ENABLED] = true
@@ -789,6 +851,9 @@ class DataStoreSoundPreferencesDataSource(
       persistentQuickBarEnabled = current.persistentQuickBarEnabled,
       quickTileSlot1ProfileId = current.quickTileSlot1ProfileId,
       quickTileSlot2ProfileId = current.quickTileSlot2ProfileId,
+      quickTileSlot3ProfileId = current.quickTileSlot3ProfileId,
+      zenithPalette = current.zenithPalette,
+      adminAutoRelockMinutes = current.adminAutoRelockMinutes,
       // Omite pinCode no arquivo exportado para evitar exposição de PIN em backups compartilhados
       accessControlConfig = current.accessControlConfig.copy(pinCode = null),
       systemZenRulesEnabled = current.systemZenRulesEnabled,
@@ -861,6 +926,13 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_PERSISTENT_QUICK_BAR] = payload.persistentQuickBarEnabled
       prefs[KEY_QUICK_TILE_SLOT1_PROFILE_ID] = payload.quickTileSlot1ProfileId
       prefs[KEY_QUICK_TILE_SLOT2_PROFILE_ID] = payload.quickTileSlot2ProfileId
+      prefs[KEY_QUICK_TILE_SLOT3_PROFILE_ID] = payload.quickTileSlot3ProfileId
+      prefs[KEY_ZENITH_PALETTE] = payload.zenithPalette.name
+      if (payload.adminAutoRelockMinutes != null) {
+        prefs[KEY_ADMIN_AUTO_RELOCK_MINUTES] = payload.adminAutoRelockMinutes.coerceIn(1, 120)
+      } else {
+        prefs.remove(KEY_ADMIN_AUTO_RELOCK_MINUTES)
+      }
       prefs[KEY_ACCESS_CONTROL_JSON] = json.encodeToString(resolvedAccess)
       prefs[KEY_SYSTEM_ZEN_RULES_ENABLED] = payload.systemZenRulesEnabled
       prefs[KEY_SOUND_VIBRATE_ENABLED] = payload.soundVibrateEnabledFallback
@@ -907,6 +979,10 @@ class DataStoreSoundPreferencesDataSource(
     val KEY_PERSISTENT_QUICK_BAR = booleanPreferencesKey("persistent_quick_bar_enabled")
     val KEY_QUICK_TILE_SLOT1_PROFILE_ID = stringPreferencesKey("quick_tile_slot1_profile_id")
     val KEY_QUICK_TILE_SLOT2_PROFILE_ID = stringPreferencesKey("quick_tile_slot2_profile_id")
+    val KEY_QUICK_TILE_SLOT3_PROFILE_ID = stringPreferencesKey("quick_tile_slot3_profile_id")
+    val KEY_ZENITH_PALETTE = stringPreferencesKey("zenith_palette")
+    val KEY_ADMIN_AUTO_RELOCK_MINUTES = intPreferencesKey("admin_auto_relock_minutes")
+    val KEY_PRO_ENTITLEMENT_CACHE_JSON = stringPreferencesKey("pro_entitlement_cache_json")
     val KEY_SAVED_MEDIA_BEFORE_MUTE = intPreferencesKey("saved_media_before_mute")
     val KEY_APP_LANGUAGE_CODE = stringPreferencesKey("app_language_code")
     val KEY_AUTOMATIONS_PAUSED = booleanPreferencesKey("automations_paused")
