@@ -2,11 +2,16 @@ package com.managesoundmode.app.data.repository
 
 import com.managesoundmode.app.data.local.PersistedSoundPrefs
 import com.managesoundmode.app.data.local.SoundPreferencesDataSource
+import com.managesoundmode.app.data.system.CalendarEventsProvider
+import com.managesoundmode.app.data.system.FakeCalendarEventsProvider
 import com.managesoundmode.app.data.system.SoundSystemController
 import com.managesoundmode.app.domain.engine.RuleEvaluationDecision
 import com.managesoundmode.app.domain.engine.RuleEvaluator
 import com.managesoundmode.app.domain.model.AccessControlConfig
+import com.managesoundmode.app.domain.model.ActiveCalendarEventWindow
 import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.CalendarRule
+import com.managesoundmode.app.domain.model.DeviceCalendarInfo
 import com.managesoundmode.app.domain.model.DeviceSoundSnapshot
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
@@ -35,6 +40,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onStart
 
 interface SoundModeRepository {
   val snapshotStream: Flow<DeviceSoundSnapshot>
@@ -89,6 +95,10 @@ interface SoundModeRepository {
   suspend fun deleteScheduleRule(ruleId: String): Result<Unit>
   suspend fun upsertLocationRule(rule: LocationRule): Result<Unit>
   suspend fun deleteLocationRule(ruleId: String): Result<Unit>
+  suspend fun upsertCalendarRule(rule: CalendarRule): Result<Unit> = Result.success(Unit)
+  suspend fun deleteCalendarRule(ruleId: String): Result<Unit> = Result.success(Unit)
+  suspend fun queryVisibleCalendars(): List<DeviceCalendarInfo> = emptyList()
+  fun hasReadCalendarPermission(): Boolean = false
   suspend fun toggleLocationPresence(ruleId: String, inside: Boolean): Result<Unit>
   suspend fun syncLocationsWithDeviceCoordinates(latitude: Double, longitude: Double): Result<Int>
 
@@ -160,11 +170,12 @@ interface SoundModeRepository {
 class DefaultSoundModeRepository(
   private val systemController: SoundSystemController,
   private val preferencesDataSource: SoundPreferencesDataSource,
+  private val calendarEventsProvider: CalendarEventsProvider = FakeCalendarEventsProvider(),
   private val onScheduleAutoRestore: (durationMinutes: Int) -> Unit = {},
   private val onCancelAutoRestore: () -> Unit = {},
   private val onScheduleExactTimerAlarm: (endsAtEpochMillis: Long) -> Unit = {},
   private val onCancelExactTimerAlarm: () -> Unit = {},
-  private val onRescheduleRuleAlarms: (scheduleRules: List<ScheduleRule>) -> Unit = {},
+  private val onRescheduleRuleAlarms: (scheduleRules: List<ScheduleRule>, nextCalendarBoundaryMillis: Long?) -> Unit = { _, _ -> },
   private val onSmartRestorePrompt: (mode: SoundMode, mediaAutoMuted: Boolean) -> Unit = { _, _ -> },
   private val onDismissSmartPrompt: () -> Unit = {},
   private val onSyncActiveTimerNotification: (session: TimedModeSession?) -> Unit = {},
@@ -189,6 +200,58 @@ class DefaultSoundModeRepository(
   private val clockNowMillis: () -> Long = { System.currentTimeMillis() },
 ) : SoundModeRepository {
 
+  constructor(
+    systemController: SoundSystemController,
+    preferencesDataSource: SoundPreferencesDataSource,
+    onScheduleAutoRestore: (durationMinutes: Int) -> Unit = {},
+    onCancelAutoRestore: () -> Unit = {},
+    onScheduleExactTimerAlarm: (endsAtEpochMillis: Long) -> Unit = {},
+    onCancelExactTimerAlarm: () -> Unit = {},
+    onRescheduleRuleAlarms: (scheduleRules: List<ScheduleRule>) -> Unit,
+    onSmartRestorePrompt: (mode: SoundMode, mediaAutoMuted: Boolean) -> Unit = { _, _ -> },
+    onDismissSmartPrompt: () -> Unit = {},
+    onSyncActiveTimerNotification: (session: TimedModeSession?) -> Unit = {},
+    onRuleOverrideAlert: (ruleName: String) -> Unit = {},
+    onAutoRoutineTransitionAlert: (
+      title: String,
+      subtitle: String,
+      state: SoundState,
+    ) -> Unit = { _, _, _ -> },
+    onLanguageChanged: () -> Unit = {},
+    onRefreshExternalSurfaces: suspend () -> Unit = {},
+    onSyncSystemZenRules: (
+      profiles: List<SoundProfile>,
+      activeProfileId: String?,
+      enabled: Boolean,
+    ) -> Int = { profiles, _, enabled -> if (enabled) profiles.size else 0 },
+    onSyncGeofenceRegistrations: (
+      locationRules: List<LocationRule>,
+      automationsPaused: Boolean,
+    ) -> Int = { rules, paused -> if (paused) 0 else rules.count { it.enabled && it.hasCoordinates } },
+    onScheduleGeofenceDwellCheck: (delayMillis: Long) -> Unit = {},
+    clockNowMillis: () -> Long = { System.currentTimeMillis() },
+  ) : this(
+    systemController = systemController,
+    preferencesDataSource = preferencesDataSource,
+    calendarEventsProvider = FakeCalendarEventsProvider(),
+    onScheduleAutoRestore = onScheduleAutoRestore,
+    onCancelAutoRestore = onCancelAutoRestore,
+    onScheduleExactTimerAlarm = onScheduleExactTimerAlarm,
+    onCancelExactTimerAlarm = onCancelExactTimerAlarm,
+    onRescheduleRuleAlarms = { rules, _ -> onRescheduleRuleAlarms(rules) },
+    onSmartRestorePrompt = onSmartRestorePrompt,
+    onDismissSmartPrompt = onDismissSmartPrompt,
+    onSyncActiveTimerNotification = onSyncActiveTimerNotification,
+    onRuleOverrideAlert = onRuleOverrideAlert,
+    onAutoRoutineTransitionAlert = onAutoRoutineTransitionAlert,
+    onLanguageChanged = onLanguageChanged,
+    onRefreshExternalSurfaces = onRefreshExternalSurfaces,
+    onSyncSystemZenRules = onSyncSystemZenRules,
+    onSyncGeofenceRegistrations = onSyncGeofenceRegistrations,
+    onScheduleGeofenceDwellCheck = onScheduleGeofenceDwellCheck,
+    clockNowMillis = clockNowMillis,
+  )
+
   private val manualRefreshTrigger = MutableStateFlow(0L)
   private val lastObservedState = AtomicReference(systemController.readSoundState())
   private val syncedInitialFallback = AtomicReference(false)
@@ -208,7 +271,8 @@ class DefaultSoundModeRepository(
     manualRefreshTrigger,
     preferencesDataSource.prefsFlow,
     isolatedPreviewBaseline,
-  ) { _, _, prefs, previewBaseline ->
+    calendarEventsProvider.calendarChanges.onStart { emit(Unit) },
+  ) { _, _, prefs, previewBaseline, _ ->
     val canWriteNow = systemController.canWriteSystemSettings()
     val wasCanWrite = lastCanWriteSettings.getAndSet(canWriteNow)
     if (!syncedInitialFallback.getAndSet(true) || (!wasCanWrite && canWriteNow)) {
@@ -221,12 +285,28 @@ class DefaultSoundModeRepository(
     )
     val allProfiles = mergeProfiles(prefs.customProfiles, prefs.deletedProfileIds)
 
+    val activeCalWindows = if (prefs.automationsPaused || prefs.calendarRules.none { it.enabled } || !calendarEventsProvider.hasReadCalendarPermission()) {
+      emptyList()
+    } else {
+      val instances = calendarEventsProvider.queryEventInstances(
+        rangeStartMillis = nowMillis - 60_000L,
+        rangeEndMillis = nowMillis + 7 * 86_400_000L,
+      )
+      RuleEvaluator.resolveCalendarWindows(
+        rules = prefs.calendarRules,
+        instances = instances,
+        nowEpochMillis = nowMillis,
+      )
+    }
+
     val decision = RuleEvaluator.evaluate(
       nowDateTime = nowDateTime,
       nowEpochMillis = nowMillis,
       profiles = allProfiles,
       scheduleRules = if (prefs.automationsPaused) emptyList() else prefs.scheduleRules,
       locationRules = if (prefs.automationsPaused) emptyList() else prefs.locationRules,
+      calendarRules = if (prefs.automationsPaused) emptyList() else prefs.calendarRules,
+      activeCalendarWindows = if (prefs.automationsPaused) emptyList() else activeCalWindows,
       activeTimer = prefs.activeTimer,
       overriddenSessionKey = prefs.overriddenSessionKey,
       restorePolicy = prefs.restorePolicy,
@@ -745,7 +825,7 @@ class DefaultSoundModeRepository(
       preferencesDataSource.setLastAppliedRuleSessionKey(null)
     }
     val updatedPrefs = preferencesDataSource.prefsFlow.first()
-    onRescheduleRuleAlarms(updatedPrefs.scheduleRules)
+    rescheduleAllAlarms(updatedPrefs)
     evaluateAndApplyRules(source = TransitionTriggerSource.SCHEDULE)
     onRefreshExternalSurfaces()
     refreshSystemState()
@@ -760,10 +840,66 @@ class DefaultSoundModeRepository(
       preferencesDataSource.setLastAppliedRuleSessionKey("force_restore_$ruleId")
     }
     val updatedPrefs = preferencesDataSource.prefsFlow.first()
-    onRescheduleRuleAlarms(updatedPrefs.scheduleRules)
+    rescheduleAllAlarms(updatedPrefs)
     evaluateAndApplyRules(source = TransitionTriggerSource.SCHEDULE)
     onRefreshExternalSurfaces()
     refreshSystemState()
+  }
+
+  override suspend fun upsertCalendarRule(rule: CalendarRule): Result<Unit> = runCatching {
+    val prevPrefs = preferencesDataSource.prefsFlow.first()
+    val wasPreviouslyActive = prevPrefs.lastAppliedRuleSessionKey?.contains(rule.id) == true
+    preferencesDataSource.upsertCalendarRule(rule)
+    preferencesDataSource.setOverriddenSessionKey(null)
+    if (!rule.enabled && wasPreviouslyActive) {
+      preferencesDataSource.setLastAppliedRuleSessionKey("force_restore_${rule.id}")
+    } else if (rule.enabled) {
+      preferencesDataSource.setLastAppliedRuleSessionKey(null)
+    }
+    val updatedPrefs = preferencesDataSource.prefsFlow.first()
+    rescheduleAllAlarms(updatedPrefs)
+    evaluateAndApplyRules(source = TransitionTriggerSource.CALENDAR)
+    onRefreshExternalSurfaces()
+    refreshSystemState()
+  }
+
+  override suspend fun deleteCalendarRule(ruleId: String): Result<Unit> = runCatching {
+    val prevPrefs = preferencesDataSource.prefsFlow.first()
+    val wasPreviouslyActive = prevPrefs.lastAppliedRuleSessionKey?.contains(ruleId) == true
+    preferencesDataSource.deleteCalendarRule(ruleId)
+    preferencesDataSource.setOverriddenSessionKey(null)
+    if (wasPreviouslyActive) {
+      preferencesDataSource.setLastAppliedRuleSessionKey("force_restore_$ruleId")
+    }
+    val updatedPrefs = preferencesDataSource.prefsFlow.first()
+    rescheduleAllAlarms(updatedPrefs)
+    evaluateAndApplyRules(source = TransitionTriggerSource.CALENDAR)
+    onRefreshExternalSurfaces()
+    refreshSystemState()
+  }
+
+  override suspend fun queryVisibleCalendars(): List<DeviceCalendarInfo> =
+    calendarEventsProvider.queryVisibleCalendars()
+
+  override fun hasReadCalendarPermission(): Boolean =
+    calendarEventsProvider.hasReadCalendarPermission()
+
+  private suspend fun rescheduleAllAlarms(updatedPrefs: PersistedSoundPrefs) {
+    val nowMillis = clockNowMillis()
+    val calInstances = if (updatedPrefs.automationsPaused || updatedPrefs.calendarRules.none { it.enabled } || !calendarEventsProvider.hasReadCalendarPermission()) {
+      emptyList()
+    } else {
+      calendarEventsProvider.queryEventInstances(
+        rangeStartMillis = nowMillis - 60_000L,
+        rangeEndMillis = nowMillis + 7 * 86_400_000L,
+      )
+    }
+    val nextCalBoundary = RuleEvaluator.computeNextCalendarBoundaryMillis(
+      calendarRules = updatedPrefs.calendarRules,
+      instances = calInstances,
+      nowEpochMillis = nowMillis,
+    )
+    onRescheduleRuleAlarms(updatedPrefs.scheduleRules, nextCalBoundary)
   }
 
   override suspend fun upsertLocationRule(rule: LocationRule): Result<Unit> = runCatching {
@@ -1251,7 +1387,7 @@ class DefaultSoundModeRepository(
       ?: allProfiles.first()
     applyProfileToSystem(defaultProfile)
     preferencesDataSource.setActiveProfileId(defaultProfile.id)
-    onRescheduleRuleAlarms(updatedPrefs.scheduleRules)
+    rescheduleAllAlarms(updatedPrefs)
     onSyncGeofenceRegistrations(updatedPrefs.locationRules, updatedPrefs.automationsPaused)
     onSyncSystemZenRules(allProfiles, defaultProfile.id, updatedPrefs.systemZenRulesEnabled)
     logTransition(
@@ -1272,7 +1408,7 @@ class DefaultSoundModeRepository(
     preferencesDataSource.importBackupJson(rawJson)
     val updatedPrefs = preferencesDataSource.prefsFlow.first()
     val allProfiles = mergeProfiles(updatedPrefs.customProfiles, updatedPrefs.deletedProfileIds)
-    onRescheduleRuleAlarms(updatedPrefs.scheduleRules)
+    rescheduleAllAlarms(updatedPrefs)
     onSyncGeofenceRegistrations(updatedPrefs.locationRules, updatedPrefs.automationsPaused)
     onSyncSystemZenRules(allProfiles, updatedPrefs.activeProfileId, updatedPrefs.systemZenRulesEnabled)
     evaluateAndApplyRules(source = TransitionTriggerSource.MANUAL)
@@ -1307,12 +1443,28 @@ class DefaultSoundModeRepository(
     }
 
     val updatedPrefs = preferencesDataSource.prefsFlow.first()
+    val calInstances = if (updatedPrefs.automationsPaused || updatedPrefs.calendarRules.none { it.enabled } || !calendarEventsProvider.hasReadCalendarPermission()) {
+      emptyList()
+    } else {
+      calendarEventsProvider.queryEventInstances(
+        rangeStartMillis = nowEpochMillis - 60_000L,
+        rangeEndMillis = nowEpochMillis + 7 * 86_400_000L,
+      )
+    }
+    val activeCalWindows = RuleEvaluator.resolveCalendarWindows(
+      rules = updatedPrefs.calendarRules,
+      instances = calInstances,
+      nowEpochMillis = nowEpochMillis,
+    )
+
     val decision = RuleEvaluator.evaluate(
       nowDateTime = nowDateTime,
       nowEpochMillis = nowEpochMillis,
       profiles = allProfiles,
       scheduleRules = if (updatedPrefs.automationsPaused) emptyList() else updatedPrefs.scheduleRules,
       locationRules = if (updatedPrefs.automationsPaused) emptyList() else updatedPrefs.locationRules,
+      calendarRules = if (updatedPrefs.automationsPaused) emptyList() else updatedPrefs.calendarRules,
+      activeCalendarWindows = if (updatedPrefs.automationsPaused) emptyList() else activeCalWindows,
       activeTimer = updatedPrefs.activeTimer,
       overriddenSessionKey = updatedPrefs.overriddenSessionKey,
       restorePolicy = updatedPrefs.restorePolicy,
@@ -1447,7 +1599,12 @@ class DefaultSoundModeRepository(
       }
     }
 
-    onRescheduleRuleAlarms(updatedPrefs.scheduleRules)
+    val nextCalBoundary = RuleEvaluator.computeNextCalendarBoundaryMillis(
+      calendarRules = updatedPrefs.calendarRules,
+      instances = calInstances,
+      nowEpochMillis = nowEpochMillis,
+    )
+    onRescheduleRuleAlarms(updatedPrefs.scheduleRules, nextCalBoundary)
     onSyncActiveTimerNotification(updatedPrefs.activeTimer)
     onRefreshExternalSurfaces()
     refreshSystemState()
@@ -1690,12 +1847,27 @@ class DefaultSoundModeRepository(
       ZoneId.systemDefault(),
     )
     val allProfiles = mergeProfiles(prefs.customProfiles, prefs.deletedProfileIds)
+    val activeCalWindows = if (prefs.automationsPaused || prefs.calendarRules.none { it.enabled } || !calendarEventsProvider.hasReadCalendarPermission()) {
+      emptyList()
+    } else {
+      val instances = calendarEventsProvider.queryEventInstances(
+        rangeStartMillis = nowMillis - 60_000L,
+        rangeEndMillis = nowMillis + 7 * 86_400_000L,
+      )
+      RuleEvaluator.resolveCalendarWindows(
+        rules = prefs.calendarRules,
+        instances = instances,
+        nowEpochMillis = nowMillis,
+      )
+    }
     val decision = RuleEvaluator.evaluate(
       nowDateTime = nowDateTime,
       nowEpochMillis = nowMillis,
       profiles = allProfiles,
       scheduleRules = if (prefs.automationsPaused) emptyList() else prefs.scheduleRules,
       locationRules = if (prefs.automationsPaused) emptyList() else prefs.locationRules,
+      calendarRules = if (prefs.automationsPaused) emptyList() else prefs.calendarRules,
+      activeCalendarWindows = if (prefs.automationsPaused) emptyList() else activeCalWindows,
       activeTimer = prefs.activeTimer,
       overriddenSessionKey = null,
       restorePolicy = prefs.restorePolicy,

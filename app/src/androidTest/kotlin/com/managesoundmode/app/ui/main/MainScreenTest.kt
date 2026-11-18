@@ -23,6 +23,8 @@ import com.managesoundmode.app.domain.model.AccessControlConfig
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.CalendarRule
+import com.managesoundmode.app.domain.model.DeviceCalendarInfo
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.ScheduleRule
@@ -1432,5 +1434,144 @@ class MainScreenTest {
     composeTestRule.onNodeWithText(AppLabels.Profiles.applyNowButton).performScrollTo().performClick()
     assertTrue(stopCalls > stopsBeforeClose)
     assertEquals(null, activePreview)
+  }
+
+  // =========================================================================
+  // UC-49 a UC-52: Automação por Eventos de Agenda (CAL-01 / SPEC-008)
+  // =========================================================================
+
+  @Test
+  fun uc49_to_uc52_calendarAutomation_segmentsJitCardCreateEditToggleAndPrecedence() {
+    var calendarRulesList by mutableStateOf<List<CalendarRule>>(emptyList())
+    var hasCalendarPermission by mutableStateOf(false)
+    var permissionRequested = false
+    var toggledCalendarRule: Pair<String, Boolean>? = null
+    var upsertedRule: CalendarRule? = null
+    var duplicatedRuleId: String? = null
+    var deletedRuleId: String? = null
+
+    val deviceCalendars = listOf(
+      DeviceCalendarInfo(id = 1L, displayName = "Pessoal", accountName = "user@gmail.com", visible = true),
+      DeviceCalendarInfo(id = 2L, displayName = "Trabalho", accountName = "work@company.com", visible = true),
+    )
+
+    composeTestRule.setContent {
+      ManageSoundModeTheme {
+        MainDashboardContent(
+          state = MainScreenUiState.Ready(
+            currentMode = SoundMode.NORMAL,
+            streams = VolumeStreams(),
+            hasDndPermission = true,
+            hasNotificationPermission = true,
+            canScheduleExactAlarms = true,
+            hasLocationPermission = false,
+            hasAcceptedLocationDisclosure = true,
+            profiles = SoundProfile.defaultPresets,
+            scheduleRules = ScheduleRule.defaultSchedules,
+            calendarRules = calendarRulesList,
+            hasReadCalendarPermission = hasCalendarPermission,
+            availableCalendars = deviceCalendars,
+          ),
+          onSelectMode = {},
+          onStreamVolumeChange = { _, _ -> },
+          onActivateProfile = {},
+          onStartTimer = { _, _ -> },
+          onCancelTimer = {},
+          onSaveProfile = { _, _ -> },
+          onDismissMessage = {},
+          onRequestDndPermission = {},
+          onRequestCalendarPermission = { permissionRequested = true },
+          onToggleCalendarRule = { rule, enabled ->
+            toggledCalendarRule = rule.id to enabled
+            calendarRulesList = calendarRulesList.map {
+              if (it.id == rule.id) it.copy(enabled = enabled) else it
+            }
+          },
+          onUpsertCalendarRule = { rule ->
+            upsertedRule = rule
+            val exists = calendarRulesList.any { it.id == rule.id }
+            calendarRulesList = if (exists) {
+              calendarRulesList.map { if (it.id == rule.id) rule else it }
+            } else {
+              calendarRulesList + rule
+            }
+          },
+          onDuplicateCalendarRule = { rule ->
+            duplicatedRuleId = rule.id
+            calendarRulesList = calendarRulesList + rule.copy(id = "copy_${rule.id}", name = "${rule.name} (Cópia)")
+          },
+          onDeleteCalendarRule = { ruleId ->
+            deletedRuleId = ruleId
+            calendarRulesList = calendarRulesList.filterNot { it.id == ruleId }
+          },
+        )
+      }
+    }
+
+    // 1. Navegar até a aba Horários/Agenda
+    composeTestRule.onNodeWithTag(AppTestTags.Tabs.SCHEDULES).performClick()
+
+    // 2. Segmento Horários Fixos ativo por padrão
+    composeTestRule.onNodeWithTag(AppTestTags.Schedules.SEGMENT_FIXED).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.Schedules.LIST).assertIsDisplayed()
+
+    // 3. Alternar para o segmento Agenda (UC-49)
+    composeTestRule.onNodeWithTag(AppTestTags.Schedules.SEGMENT_CALENDAR).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.LIST).assertIsDisplayed()
+
+    // 4. Card JIT de permissão ausente exibido (UC-49)
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.PERMISSION_CARD).assertIsDisplayed()
+
+    // 5. FAB de adicionar regra de agenda sem permissão aciona o disclosure (UC-50)
+    composeTestRule.onNodeWithTag(AppTestTags.Fab.ADD_CALENDAR_RULE_FAB).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.DISCLOSURE_DIALOG).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.DISMISS_DISCLOSURE_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.DISCLOSURE_DIALOG).assertDoesNotExist()
+
+    // Tocar no botão de autorizar no Card JIT aciona disclosure e aceita
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.GRANT_PERMISSION_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.DISCLOSURE_DIALOG).assertIsDisplayed()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.ACCEPT_DISCLOSURE_BUTTON).performClick()
+    assertTrue(permissionRequested)
+
+    // Simula concessão da permissão
+    hasCalendarPermission = true
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.PERMISSION_CARD).assertDoesNotExist()
+
+    // 6. Criar nova regra de agenda pelo FAB (UC-51)
+    composeTestRule.onNodeWithTag(AppTestTags.Fab.ADD_CALENDAR_RULE_FAB).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.NAME_INPUT).performTextClearance()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.NAME_INPUT).performTextInput("Reuniões Importantes")
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.KEYWORD_INPUT).performTextInput("Reunião, Daily")
+
+    // Salvar regra
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.CONFIRM_SAVE_BUTTON).performClick()
+    assertNotNull(upsertedRule)
+    assertEquals("Reuniões Importantes", upsertedRule?.name)
+
+    // 7. Regra criada aparece na lista (UC-51)
+    val ruleId = upsertedRule!!.id
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.card(ruleId)).assertIsDisplayed()
+
+    // 8. Alternar switch da regra
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.switch(ruleId)).performClick()
+    assertEquals(ruleId to false, toggledCalendarRule)
+
+    // 9. Menu contextual: Duplicar e Excluir
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.optionsButton(ruleId)).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.menuDuplicateItem(ruleId)).performClick()
+    assertEquals(ruleId, duplicatedRuleId)
+    assertEquals(2, calendarRulesList.size)
+
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.optionsButton(ruleId)).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.CalendarRules.menuDeleteItem(ruleId)).performClick()
+    assertEquals(ruleId, deletedRuleId)
+    assertEquals(1, calendarRulesList.size)
+
+    // 10. UC-52: Diagnóstico em Configurações exibe linha opcional de Agenda
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.OVERFLOW_MENU_BUTTON).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.TopBar.MENU_PERMISSIONS).performClick()
+    composeTestRule.onNodeWithTag(AppTestTags.Settings.GRANT_CALENDAR_PERMISSION_BUTTON).assertIsDisplayed()
   }
 }

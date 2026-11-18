@@ -29,6 +29,7 @@ import com.managesoundmode.app.ManageSoundApplication
 import com.managesoundmode.app.data.local.PersistedSoundPrefs
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.StreamSortMode
@@ -1078,6 +1079,86 @@ class ManageSoundModeE2ETest {
       assertEquals(baselineMediaIndex, audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
     } finally {
       previewPlayer.stop()
+      runBlocking {
+        app.container.preferencesDataSource.resetFactoryDefaults()
+        app.container.preferencesDataSource.setOnboardingCompleted(true)
+        app.container.soundSystemController.applySoundState(SoundState.DEFAULT)
+        app.container.soundModeRepository.refreshSystemState()
+      }
+    }
+  }
+
+  // =========================================================================
+  // e2e12: Jornada Completa de Automação por Eventos de Agenda (SPEC-008)
+  // =========================================================================
+
+  @Test
+  fun e2e12_spec008_calendarEventsAutomationJourney() {
+    execShellCommandSync("pm grant ${app.packageName} android.permission.READ_CALENDAR")
+    runBlocking {
+      app.container.soundModeRepository.refreshSystemState()
+    }
+    composeRule.waitForIdle()
+
+    try {
+      // 1. Navegar para a aba de Horários e Agenda
+      composeRule.onNodeWithTag(AppTestTags.Tabs.SCHEDULES).performClick()
+      composeRule.waitForIdle()
+
+      // 2. Alternar para o segmento de Agenda
+      composeRule.onNodeWithTag(AppTestTags.Schedules.SEGMENT_CALENDAR).performClick()
+      composeRule.waitForIdle()
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.LIST).assertIsDisplayed()
+
+      // 3. Adicionar regra de agenda pelo FAB
+      composeRule.onNodeWithTag(AppTestTags.Fab.ADD_CALENDAR_RULE_FAB).performClick()
+      composeRule.waitForIdle()
+
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.NAME_INPUT).performTextClearance()
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.NAME_INPUT).performTextInput("Reuniões E2E")
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.KEYWORD_INPUT).performTextInput("Daily, Sync")
+
+      // Salvar regra
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.CONFIRM_SAVE_BUTTON).performClick()
+      composeRule.waitForIdle()
+
+      // 4. Aguardar persistência no DataStore real
+      val prefsWithRule = awaitPrefs("calendarRuleAdded") {
+        it.calendarRules.any { r -> r.name == "Reuniões E2E" }
+      }
+      val savedRule = prefsWithRule.calendarRules.first { it.name == "Reuniões E2E" }
+      assertTrue(savedRule.enabled)
+      assertEquals("Daily, Sync", savedRule.keywordFilter)
+
+      // 5. Card visível e funcional na lista
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.card(savedRule.id)).assertIsDisplayed()
+
+      // 6. Alternar switch da regra
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.switch(savedRule.id)).performClick()
+      val prefsDisabled = awaitPrefs("calendarRuleDisabled") {
+        it.calendarRules.firstOrNull { r -> r.id == savedRule.id }?.enabled == false
+      }
+      val disabledRule = prefsDisabled.calendarRules.first { it.id == savedRule.id }
+      assertEquals(false, disabledRule.enabled)
+
+      // 7. Simular broadcast do sistema: PROVIDER_CHANGED para content://com.android.calendar
+      val providerIntent = Intent(Intent.ACTION_PROVIDER_CHANGED).apply {
+        data = android.net.Uri.parse("content://com.android.calendar")
+        setPackage(app.packageName)
+      }
+      InternalIntentSecurity.signIntent(app, providerIntent)
+      app.sendBroadcast(providerIntent)
+      composeRule.waitForIdle()
+
+      // 8. Excluir regra pelo menu contextual
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.optionsButton(savedRule.id)).performClick()
+      composeRule.onNodeWithTag(AppTestTags.CalendarRules.menuDeleteItem(savedRule.id)).performClick()
+
+      val prefsDeleted = awaitPrefs("calendarRuleDeleted") {
+        it.calendarRules.none { r -> r.id == savedRule.id }
+      }
+      assertTrue(prefsDeleted.calendarRules.none { it.id == savedRule.id })
+    } finally {
       runBlocking {
         app.container.preferencesDataSource.resetFactoryDefaults()
         app.container.preferencesDataSource.setOnboardingCompleted(true)

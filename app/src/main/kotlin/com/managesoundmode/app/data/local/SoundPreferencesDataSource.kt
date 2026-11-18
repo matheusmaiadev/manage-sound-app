@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.managesoundmode.app.domain.model.AccessControlConfig
+import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SavedStateSnapshot
@@ -41,6 +42,7 @@ data class SoundPrefsBackupPayload(
   val deletedProfileIds: Set<String> = emptySet(),
   val scheduleRules: List<ScheduleRule> = ScheduleRule.defaultSchedules,
   val locationRules: List<LocationRule> = LocationRule.defaultLocations,
+  val calendarRules: List<CalendarRule> = emptyList(),
   val restorePolicy: RestorePolicy = RestorePolicy.DEFAULT_PROFILE,
   val defaultDayProfileId: String = SoundProfile.DEFAULT_DAY_PROFILE_ID,
   val useDynamicColor: Boolean = true,
@@ -78,6 +80,7 @@ data class PersistedSoundPrefs(
   val deletedProfileIds: Set<String> = emptySet(),
   val scheduleRules: List<ScheduleRule> = ScheduleRule.defaultSchedules,
   val locationRules: List<LocationRule> = LocationRule.defaultLocations,
+  val calendarRules: List<CalendarRule> = emptyList(),
   val restorePolicy: RestorePolicy = RestorePolicy.DEFAULT_PROFILE,
   val defaultDayProfileId: String = SoundProfile.DEFAULT_DAY_PROFILE_ID,
   val savedSnapshot: SavedStateSnapshot? = null,
@@ -126,6 +129,8 @@ interface SoundPreferencesDataSource {
   suspend fun deleteScheduleRule(ruleId: String) {}
   suspend fun upsertLocationRule(rule: LocationRule) {}
   suspend fun deleteLocationRule(ruleId: String) {}
+  suspend fun upsertCalendarRule(rule: CalendarRule) {}
+  suspend fun deleteCalendarRule(ruleId: String) {}
   suspend fun setRestorePolicy(policy: RestorePolicy) {}
   suspend fun setDefaultDayProfileId(profileId: String) {}
   suspend fun setSavedSnapshot(snapshot: SavedStateSnapshot?) {}
@@ -213,6 +218,12 @@ class DataStoreSoundPreferencesDataSource(
             .getOrDefault(LocationRule.defaultLocations)
         } ?: LocationRule.defaultLocations
 
+        val calendarRules = prefs[KEY_CALENDAR_RULES_JSON]?.let { raw ->
+          runCatching { json.decodeFromString<List<CalendarRule>>(raw) }
+            .onFailure { Log.w(TAG, "Falha ao desserializar regras de agenda", it) }
+            .getOrDefault(emptyList())
+        } ?: emptyList()
+
         val restorePolicy = prefs[KEY_RESTORE_POLICY]?.let { raw ->
           runCatching { RestorePolicy.valueOf(raw) }.getOrDefault(RestorePolicy.DEFAULT_PROFILE)
         } ?: RestorePolicy.DEFAULT_PROFILE
@@ -280,6 +291,7 @@ class DataStoreSoundPreferencesDataSource(
           deletedProfileIds = deletedProfileIds,
           scheduleRules = scheduleRules,
           locationRules = locationRules,
+          calendarRules = calendarRules,
           restorePolicy = restorePolicy,
           defaultDayProfileId = defaultDayProfileId,
           savedSnapshot = savedSnapshot,
@@ -425,6 +437,33 @@ class DataStoreSoundPreferencesDataSource(
       } ?: LocationRule.defaultLocations
       val updated = currentList.filterNot { it.id == ruleId }
       prefs[KEY_LOCATION_RULES_JSON] = json.encodeToString(updated)
+    }
+  }
+
+  override suspend fun upsertCalendarRule(rule: CalendarRule) {
+    context.soundDataStore.edit { prefs ->
+      val currentList = prefs[KEY_CALENDAR_RULES_JSON]?.let { raw ->
+        runCatching { json.decodeFromString<List<CalendarRule>>(raw) }
+          .getOrDefault(emptyList())
+      } ?: emptyList()
+      val existingIndex = currentList.indexOfFirst { it.id == rule.id }
+      val updated = if (existingIndex >= 0) {
+        currentList.toMutableList().apply { set(existingIndex, rule) }
+      } else {
+        currentList + rule
+      }
+      prefs[KEY_CALENDAR_RULES_JSON] = json.encodeToString(updated)
+    }
+  }
+
+  override suspend fun deleteCalendarRule(ruleId: String) {
+    context.soundDataStore.edit { prefs ->
+      val currentList = prefs[KEY_CALENDAR_RULES_JSON]?.let { raw ->
+        runCatching { json.decodeFromString<List<CalendarRule>>(raw) }
+          .getOrDefault(emptyList())
+      } ?: emptyList()
+      val updated = currentList.filterNot { it.id == ruleId }
+      prefs[KEY_CALENDAR_RULES_JSON] = json.encodeToString(updated)
     }
   }
 
@@ -693,6 +732,7 @@ class DataStoreSoundPreferencesDataSource(
       prefs.remove(KEY_DELETED_PROFILE_IDS_JSON)
       prefs.remove(KEY_SCHEDULE_RULES_JSON)
       prefs.remove(KEY_LOCATION_RULES_JSON)
+      prefs.remove(KEY_CALENDAR_RULES_JSON)
       prefs[KEY_RESTORE_POLICY] = RestorePolicy.DEFAULT_PROFILE.name
       prefs[KEY_DEFAULT_DAY_PROFILE_ID] = SoundProfile.DEFAULT_DAY_PROFILE_ID
       prefs.remove(KEY_SAVED_SNAPSHOT_JSON)
@@ -733,6 +773,7 @@ class DataStoreSoundPreferencesDataSource(
       deletedProfileIds = current.deletedProfileIds,
       scheduleRules = current.scheduleRules,
       locationRules = current.locationRules,
+      calendarRules = current.calendarRules,
       restorePolicy = current.restorePolicy,
       defaultDayProfileId = current.defaultDayProfileId,
       useDynamicColor = current.useDynamicColor,
@@ -778,6 +819,13 @@ class DataStoreSoundPreferencesDataSource(
     // Migra transparentemente perfis v1/v2 sem sobrescrever canais secundários não configurados
     val sanitizedProfiles = payload.customProfiles.take(MAX_IMPORTED_ITEMS).map { it.normalized() }
     val sanitizedSchedules = payload.scheduleRules.take(MAX_IMPORTED_ITEMS)
+    val sanitizedCalendarRules = payload.calendarRules.take(MAX_IMPORTED_ITEMS).map { rule ->
+      rule.copy(
+        name = rule.name.take(80),
+        keywordFilter = rule.keywordFilter.take(200),
+        calendarIds = rule.calendarIds.filter { it >= 0 }.toSet(),
+      )
+    }
     val sanitizedUsageCounts = payload.streamUsageCounts
       .mapValues { (_, count) -> count.coerceIn(0, MAX_USAGE_COUNT) }
     val sanitizedManualOrder = VolumeStreamType.normalizeManualStreamOrder(payload.manualStreamOrder)
@@ -797,6 +845,7 @@ class DataStoreSoundPreferencesDataSource(
       prefs[KEY_DELETED_PROFILE_IDS_JSON] = json.encodeToString(payload.deletedProfileIds.take(MAX_IMPORTED_ITEMS).toSet())
       prefs[KEY_SCHEDULE_RULES_JSON] = json.encodeToString(sanitizedSchedules)
       prefs[KEY_LOCATION_RULES_JSON] = json.encodeToString(sanitizedLocations)
+      prefs[KEY_CALENDAR_RULES_JSON] = json.encodeToString(sanitizedCalendarRules)
       prefs[KEY_RESTORE_POLICY] = payload.restorePolicy.name
       prefs[KEY_DEFAULT_DAY_PROFILE_ID] = payload.defaultDayProfileId
       prefs[KEY_USE_DYNAMIC_COLOR] = payload.useDynamicColor
@@ -841,6 +890,7 @@ class DataStoreSoundPreferencesDataSource(
     val KEY_DELETED_PROFILE_IDS_JSON = stringPreferencesKey("deleted_profile_ids_json")
     val KEY_SCHEDULE_RULES_JSON = stringPreferencesKey("schedule_rules_json")
     val KEY_LOCATION_RULES_JSON = stringPreferencesKey("location_rules_json")
+    val KEY_CALENDAR_RULES_JSON = stringPreferencesKey("calendar_rules_json")
     val KEY_RESTORE_POLICY = stringPreferencesKey("restore_policy")
     val KEY_DEFAULT_DAY_PROFILE_ID = stringPreferencesKey("default_day_profile_id")
     val KEY_SAVED_SNAPSHOT_JSON = stringPreferencesKey("saved_snapshot_json")

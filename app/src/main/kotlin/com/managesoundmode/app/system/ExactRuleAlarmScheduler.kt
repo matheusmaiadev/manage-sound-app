@@ -19,11 +19,15 @@ object ExactRuleAlarmScheduler {
   fun scheduleNextTransition(
     context: Context,
     scheduleRules: List<ScheduleRule>,
+    nextCalendarBoundaryMillis: Long? = null,
   ) {
     val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
     val pendingIntent = createAlarmPendingIntent(context)
 
-    val nextTriggerMillis = RuleEvaluator.computeNextScheduleTransitionMillis(scheduleRules)
+    val nextTriggerMillis = RuleEvaluator.computeNextAutomationTransitionMillis(
+      scheduleRules = scheduleRules,
+      nextCalendarBoundaryMillis = nextCalendarBoundaryMillis,
+    )
     if (nextTriggerMillis == null) {
       alarmManager.cancel(pendingIntent)
       return

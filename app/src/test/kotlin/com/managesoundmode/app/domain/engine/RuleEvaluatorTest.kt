@@ -1,7 +1,10 @@
 package com.managesoundmode.app.domain.engine
 
 import com.managesoundmode.app.domain.model.AccessControlConfig
+import com.managesoundmode.app.domain.model.ActiveCalendarEventWindow
 import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.CalendarEventInstance
+import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SavedStateSnapshot
@@ -11,6 +14,7 @@ import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.SoundState
 import com.managesoundmode.app.domain.model.TimedModeSession
 import com.managesoundmode.app.domain.model.TransitionLogEntry
+import com.managesoundmode.app.domain.model.TransitionTriggerSource
 import com.managesoundmode.app.domain.model.VolumeStreams
 import com.managesoundmode.app.domain.model.Weekday
 import java.time.LocalDateTime
@@ -408,5 +412,316 @@ class RuleEvaluatorTest {
     ) as RuleEvaluationDecision.ApplyRule
     assertEquals("l4", d34.winner.ruleId)
     assertEquals(SoundState(BaseAudioMode.SILENT, false), d34.winner.profile.resolvedSoundState)
+  }
+
+  @Test
+  fun matchesCalendarEvent_verifiesBusyOnly_keywords_calendarIds_and_allDay() {
+    val rule = CalendarRule(
+      id = "cal_rule_1",
+      name = "Trabalho",
+      calendarIds = setOf(1L, 2L),
+      busyOnly = true,
+      ignoreAllDayEvents = true,
+      keywordFilter = "Reunião, Daily, Sprint",
+      targetProfileId = "preset_silent",
+    )
+
+    val now = 100_000L
+    // Evento perfeitamente coincidente (ocupado, calendário 1, palavra 'Daily', não all-day, dentro do horário)
+    val validInstance = CalendarEventInstance(
+      eventId = 10L,
+      calendarId = 1L,
+      title = "Daily de Engenharia",
+      beginMillis = 90_000L,
+      endMillis = 110_000L,
+      allDay = false,
+      availability = CalendarEventInstance.AVAILABILITY_BUSY,
+    )
+    assertTrue(RuleEvaluator.matchesCalendarEvent(rule, validInstance, now))
+
+    // 1. Falha por não ser "Ocupado" (AVAILABILITY_FREE)
+    val freeInstance = validInstance.copy(availability = CalendarEventInstance.AVAILABILITY_FREE)
+    assertFalse(RuleEvaluator.matchesCalendarEvent(rule, freeInstance, now))
+
+    // 2. Falha por calendário diferente (id 3L)
+    val otherCalInstance = validInstance.copy(calendarId = 3L)
+    assertFalse(RuleEvaluator.matchesCalendarEvent(rule, otherCalInstance, now))
+
+    // 3. Falha por palavra-chave não correspondente
+    val differentTitleInstance = validInstance.copy(title = "Almoço com amigos")
+    assertFalse(RuleEvaluator.matchesCalendarEvent(rule, differentTitleInstance, now))
+
+    // 4. Falha por ser evento de dia inteiro (quando ignoreAllDayEvents = true)
+    val allDayInstance = validInstance.copy(allDay = true)
+    assertFalse(RuleEvaluator.matchesCalendarEvent(rule, allDayInstance, now))
+
+    // 5. Se ignoreAllDayEvents = false, evento all-day deve passar
+    val ruleAllowsAllDay = rule.copy(ignoreAllDayEvents = false)
+    assertTrue(RuleEvaluator.matchesCalendarEvent(ruleAllowsAllDay, allDayInstance, now))
+
+    // 6. Fora da janela de tempo (evento já finalizou)
+    val pastInstance = validInstance.copy(beginMillis = 10_000L, endMillis = 50_000L)
+    assertFalse(RuleEvaluator.matchesCalendarEvent(rule, pastInstance, now))
+
+    // 7. Fora da janela de tempo (evento futuro)
+    val futureInstance = validInstance.copy(beginMillis = 150_000L, endMillis = 200_000L)
+    assertFalse(RuleEvaluator.matchesCalendarEvent(rule, futureInstance, now))
+  }
+
+  @Test
+  fun resolveCalendarWindows_extractsActiveWindowsForMatchingEvents() {
+    val rule = CalendarRule(
+      id = "cal_1",
+      name = "Daily",
+      busyOnly = true,
+      targetProfileId = "preset_vibrate",
+    )
+    val instance = CalendarEventInstance(
+      eventId = 42L,
+      calendarId = 1L,
+      title = "Daily Standup",
+      beginMillis = 1_000L,
+      endMillis = 5_000L,
+      allDay = false,
+      availability = CalendarEventInstance.AVAILABILITY_BUSY,
+    )
+
+    val windows = RuleEvaluator.resolveCalendarWindows(
+      rules = listOf(rule),
+      instances = listOf(instance),
+      nowEpochMillis = 3_000L,
+    )
+    assertEquals(1, windows.size)
+    assertEquals("cal_1", windows[0].ruleId)
+    assertEquals(42L, windows[0].eventId)
+    assertEquals(1_000L, windows[0].beginMillis)
+    assertEquals(5_000L, windows[0].endMillis)
+  }
+
+  @Test
+  fun evaluate_tieBreaker_calendarBeatsScheduleAndLocationWithSameRank() {
+    // Ambos com perfil Silencioso sem vibração (rank 4)
+    val silentProfile = SoundProfile(
+      id = "p_silent_novib",
+      name = "Silencioso",
+      description = "Mudo absoluto",
+      audioMode = BaseAudioMode.SILENT,
+      vibrateEnabled = false,
+      streams = VolumeStreams(),
+      isPreset = false,
+    )
+    val allProfiles = listOf(silentProfile)
+
+    val scheduleRule = ScheduleRule(
+      id = "sched_1",
+      name = "Horário",
+      startHour = 9,
+      startMinute = 0,
+      endHour = 17,
+      endMinute = 0,
+      daysOfWeek = Weekday.weekdays,
+      targetProfileId = silentProfile.id,
+    )
+    val locationRule = LocationRule(
+      id = "loc_1",
+      name = "Local",
+      latitude = 0.0,
+      longitude = 0.0,
+      targetProfileId = silentProfile.id,
+      isCurrentlyInside = true,
+    )
+    val calendarRule = CalendarRule(
+      id = "cal_1",
+      name = "Reunião",
+      targetProfileId = silentProfile.id,
+    )
+    val calendarWindow = ActiveCalendarEventWindow(
+      ruleId = calendarRule.id,
+      eventId = 88L,
+      eventTitle = "Reunião Diretoria",
+      beginMillis = 10_000L,
+      endMillis = 20_000L,
+    )
+
+    val nowDateTime = LocalDateTime.of(2026, 11, 2, 10, 0)
+    val decision = RuleEvaluator.evaluate(
+      nowDateTime = nowDateTime,
+      nowEpochMillis = 15_000L,
+      profiles = allProfiles,
+      scheduleRules = listOf(scheduleRule),
+      locationRules = listOf(locationRule),
+      calendarRules = listOf(calendarRule),
+      activeCalendarWindows = listOf(calendarWindow),
+      activeTimer = null,
+      overriddenSessionKey = null,
+      restorePolicy = RestorePolicy.DEFAULT_PROFILE,
+    ) as RuleEvaluationDecision.ApplyRule
+
+    // Desempate: CALENDAR (0) > SCHEDULE (1) > LOCATION (2)
+    assertEquals("cal_1", decision.winner.ruleId)
+    assertEquals(TransitionTriggerSource.CALENDAR, decision.winner.source)
+    assertEquals("calendar:cal_1:88:10000", decision.winner.sessionKey)
+  }
+
+  @Test
+  fun evaluate_calendarHighPriority_beatsOtherRules() {
+    val normalProfile = SoundProfile(
+      id = "p_normal",
+      name = "Normal",
+      description = "Som",
+      audioMode = BaseAudioMode.SOUND,
+      vibrateEnabled = true,
+      streams = VolumeStreams(),
+      isPreset = false,
+    )
+    val silentProfile = SoundProfile(
+      id = "p_silent",
+      name = "Mudo",
+      description = "Mudo",
+      audioMode = BaseAudioMode.SILENT,
+      vibrateEnabled = false,
+      streams = VolumeStreams(),
+      isPreset = false,
+    )
+
+    val calendarRule = CalendarRule(
+      id = "cal_urgent",
+      name = "Palestra Alta Prioridade",
+      targetProfileId = silentProfile.id,
+      highPriority = true,
+    )
+    val calendarWindow = ActiveCalendarEventWindow(
+      ruleId = calendarRule.id,
+      eventId = 99L,
+      eventTitle = "Palestra",
+      beginMillis = 1_000L,
+      endMillis = 5_000L,
+    )
+
+    val scheduleRule = ScheduleRule(
+      id = "sched_normal",
+      name = "Trabalho Normal",
+      startHour = 9,
+      startMinute = 0,
+      endHour = 18,
+      endMinute = 0,
+      daysOfWeek = Weekday.weekdays,
+      targetProfileId = normalProfile.id,
+      highPriority = false,
+    )
+
+    val decision = RuleEvaluator.evaluate(
+      nowDateTime = LocalDateTime.of(2026, 11, 2, 10, 0),
+      nowEpochMillis = 2_000L,
+      profiles = listOf(normalProfile, silentProfile),
+      scheduleRules = listOf(scheduleRule),
+      locationRules = emptyList(),
+      calendarRules = listOf(calendarRule),
+      activeCalendarWindows = listOf(calendarWindow),
+      activeTimer = null,
+      overriddenSessionKey = null,
+      restorePolicy = RestorePolicy.DEFAULT_PROFILE,
+    ) as RuleEvaluationDecision.ApplyRule
+
+    assertEquals("cal_urgent", decision.winner.ruleId)
+    assertEquals(TransitionTriggerSource.CALENDAR, decision.winner.source)
+  }
+
+  @Test
+  fun evaluate_calendarEventManualOverride_suppressesSpecificWindow() {
+    val silentProfile = SoundProfile(
+      id = "p_silent",
+      name = "Mudo",
+      description = "Mudo",
+      audioMode = BaseAudioMode.SILENT,
+      vibrateEnabled = false,
+      streams = VolumeStreams(),
+      isPreset = false,
+    )
+    val defaultProfile = SoundProfile(
+      id = "p_default",
+      name = "Padrão",
+      description = "Padrão",
+      audioMode = BaseAudioMode.SOUND,
+      vibrateEnabled = true,
+      streams = VolumeStreams(),
+      isPreset = false,
+    )
+
+    val calendarRule = CalendarRule(
+      id = "cal_1",
+      name = "Reunião",
+      targetProfileId = silentProfile.id,
+    )
+    val calendarWindow = ActiveCalendarEventWindow(
+      ruleId = calendarRule.id,
+      eventId = 77L,
+      eventTitle = "Reunião",
+      beginMillis = 10_000L,
+      endMillis = 20_000L,
+    )
+
+    // Override manual do usuário exatamente nesta sessão do evento
+    val sessionKey = "calendar:cal_1:77:10000"
+
+    val decision = RuleEvaluator.evaluate(
+      nowDateTime = LocalDateTime.of(2026, 11, 2, 10, 0),
+      nowEpochMillis = 15_000L,
+      profiles = listOf(silentProfile, defaultProfile),
+      scheduleRules = emptyList(),
+      locationRules = emptyList(),
+      calendarRules = listOf(calendarRule),
+      activeCalendarWindows = listOf(calendarWindow),
+      activeTimer = null,
+      overriddenSessionKey = sessionKey,
+      defaultDayProfileId = defaultProfile.id,
+      restorePolicy = RestorePolicy.DEFAULT_PROFILE,
+    )
+
+    // Candidato foi suprimido pelo override manual do evento -> cai no RuleOverriddenByUser
+    assertTrue(decision is RuleEvaluationDecision.RuleOverriddenByUser)
+  }
+
+  @Test
+  fun computeNextCalendarBoundaryMillis_and_automationTransition() {
+    val rule = CalendarRule(
+      id = "cal_1",
+      name = "Reunião",
+      targetProfileId = "preset_silent",
+    )
+    val instance1 = CalendarEventInstance(
+      eventId = 1L,
+      calendarId = 1L,
+      title = "Em andamento",
+      beginMillis = 1_000L,
+      endMillis = 5_000L,
+      allDay = false,
+      availability = CalendarEventInstance.AVAILABILITY_BUSY,
+    )
+    val instance2 = CalendarEventInstance(
+      eventId = 2L,
+      calendarId = 1L,
+      title = "Futuro",
+      beginMillis = 8_000L,
+      endMillis = 12_000L,
+      allDay = false,
+      availability = CalendarEventInstance.AVAILABILITY_BUSY,
+    )
+
+    val now = 3_000L
+    // Próximo boundary de calendário: ou o término do evento 1 (5_000L) ou início do evento 2 (8_000L) -> 5_000L
+    val nextBoundary = RuleEvaluator.computeNextCalendarBoundaryMillis(
+      calendarRules = listOf(rule),
+      instances = listOf(instance1, instance2),
+      nowEpochMillis = now,
+    )
+    assertEquals(5_000L, nextBoundary)
+
+    // Comparando com schedule: se schedule rules for vazio e calendar for 5_000L, resultado é 5_000L
+    val nextAutomation = RuleEvaluator.computeNextAutomationTransitionMillis(
+      scheduleRules = emptyList(),
+      nextCalendarBoundaryMillis = nextBoundary,
+    )
+    assertEquals(5_000L, nextAutomation)
   }
 }

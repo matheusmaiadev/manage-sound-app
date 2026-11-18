@@ -100,6 +100,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -132,6 +133,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.ScheduleRule
@@ -258,6 +260,13 @@ fun MainScreen(
     viewModel.onRefreshSystemState()
   }
 
+  val calendarPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission(),
+  ) { _ ->
+    viewModel.loadVisibleCalendars()
+    viewModel.onRefreshSystemState()
+  }
+
   LifecycleResumeEffect(Unit) {
     viewModel.onRefreshSystemState()
     onPauseOrDispose {
@@ -356,6 +365,18 @@ fun MainScreen(
           },
           onToggleScheduleRule = viewModel::onToggleScheduleRule,
           onDeleteScheduleRule = viewModel::onDeleteScheduleRule,
+          onUpsertCalendarRule = { rule ->
+            viewModel.onUpsertCalendarRule(rule, showFeedback = true)
+          },
+          onAutoSaveCalendarRule = { rule ->
+            viewModel.onUpsertCalendarRule(rule, showFeedback = false)
+          },
+          onToggleCalendarRule = viewModel::onToggleCalendarRule,
+          onDeleteCalendarRule = viewModel::onDeleteCalendarRule,
+          onDuplicateCalendarRule = viewModel::onDuplicateCalendarRule,
+          onRequestCalendarPermission = {
+            calendarPermissionLauncher.launch(Manifest.permission.READ_CALENDAR)
+          },
           onUpsertLocationRule = { rule ->
             viewModel.onUpsertLocationRule(rule, showFeedback = true)
           },
@@ -520,6 +541,14 @@ internal fun MainDashboardContent(
   },
   onToggleScheduleRule: (ScheduleRule, Boolean) -> Unit = { _, _ -> },
   onDeleteScheduleRule: (String) -> Unit = {},
+  onUpsertCalendarRule: (CalendarRule) -> Unit = {},
+  onAutoSaveCalendarRule: (CalendarRule) -> Unit = { rule ->
+    onUpsertCalendarRule(rule)
+  },
+  onToggleCalendarRule: (CalendarRule, Boolean) -> Unit = { _, _ -> },
+  onDeleteCalendarRule: (String) -> Unit = {},
+  onDuplicateCalendarRule: (CalendarRule) -> Unit = {},
+  onRequestCalendarPermission: () -> Unit = {},
   onUpsertLocationRule: (LocationRule) -> Unit = {},
   onAutoSaveLocationRule: (LocationRule) -> Unit = { rule ->
     onUpsertLocationRule(rule)
@@ -607,6 +636,11 @@ internal fun MainDashboardContent(
   var editingScheduleRule by remember { mutableStateOf<ScheduleRule?>(null) }
   var showScheduleBottomSheet by rememberSaveable { mutableStateOf(false) }
 
+  var schedulesSubTab by rememberSaveable { mutableIntStateOf(0) }
+  var editingCalendarRule by remember { mutableStateOf<CalendarRule?>(null) }
+  var showCalendarRuleEditor by rememberSaveable { mutableStateOf(false) }
+  var showCalendarDisclosureDialog by rememberSaveable { mutableStateOf(false) }
+
   var editingLocationRule by remember { mutableStateOf<LocationRule?>(null) }
   var showLocationDisclosureDialog by rememberSaveable { mutableStateOf(false) }
   var showLocationBottomSheet by rememberSaveable { mutableStateOf(false) }
@@ -681,6 +715,41 @@ internal fun MainDashboardContent(
       onDismiss = {
         showScheduleBottomSheet = false
         editingScheduleRule = null
+      },
+    )
+  }
+
+  if (showCalendarDisclosureDialog) {
+    CalendarDisclosureDialog(
+      onAccept = {
+        showCalendarDisclosureDialog = false
+        onRequestCalendarPermission()
+      },
+      onDismiss = {
+        showCalendarDisclosureDialog = false
+      },
+    )
+  }
+
+  if (showCalendarRuleEditor) {
+    CalendarRuleEditorDialog(
+      initialRule = editingCalendarRule,
+      profiles = state.profiles,
+      availableCalendars = state.availableCalendars,
+      onConfirm = { rule ->
+        showCalendarRuleEditor = false
+        editingCalendarRule = null
+        onUpsertCalendarRule(rule)
+      },
+      onAutoSave = onAutoSaveCalendarRule,
+      onDelete = { ruleId ->
+        showCalendarRuleEditor = false
+        editingCalendarRule = null
+        onDeleteCalendarRule(ruleId)
+      },
+      onDismiss = {
+        showCalendarRuleEditor = false
+        editingCalendarRule = null
       },
     )
   }
@@ -877,6 +946,7 @@ internal fun MainDashboardContent(
           onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
           onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
           onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
+          onRequestCalendarPermission = onRequestCalendarPermission,
           modifier = Modifier.padding(settingsPadding),
         )
       }
@@ -935,6 +1005,7 @@ internal fun MainDashboardContent(
       onSetVolumePreviewEnabled = onSetVolumePreviewEnabled,
       onSetUseSystemSoundsForPreview = onSetUseSystemSoundsForPreview,
       onSetSilentPreAdjustEnabled = onSetSilentPreAdjustEnabled,
+      onRequestCalendarPermission = onRequestCalendarPermission,
     )
   }
 
@@ -1230,24 +1301,47 @@ internal fun MainDashboardContent(
           )
         }
         MainAppTab.SCHEDULES -> {
-          ExtendedFloatingActionButton(
-            onClick = {
-              if (!state.accessControlConfig.hasPermission(AppPermission.MANAGE_SCHEDULES)) {
-                onShowStatusMessage(
-                  AppLabels.AccessControl.permissionDeniedMessage(AppPermission.MANAGE_SCHEDULES),
-                )
-              } else {
-                editingScheduleRule = null
-                showScheduleBottomSheet = true
-              }
-            },
-            shape = RoundedCornerShape(22.dp),
-            containerColor = modeAccent,
-            contentColor = state.currentMode.onActivePillColor(),
-            icon = { Icon(Icons.Default.Add, contentDescription = null) },
-            text = { Text(AppLabels.Fab.newSchedule, fontWeight = FontWeight.Bold) },
-            modifier = Modifier.testTag(AppTestTags.Fab.ADD_SCHEDULE_FAB),
-          )
+          if (schedulesSubTab == 0) {
+            ExtendedFloatingActionButton(
+              onClick = {
+                if (!state.accessControlConfig.hasPermission(AppPermission.MANAGE_SCHEDULES)) {
+                  onShowStatusMessage(
+                    AppLabels.AccessControl.permissionDeniedMessage(AppPermission.MANAGE_SCHEDULES),
+                  )
+                } else {
+                  editingScheduleRule = null
+                  showScheduleBottomSheet = true
+                }
+              },
+              shape = RoundedCornerShape(22.dp),
+              containerColor = modeAccent,
+              contentColor = state.currentMode.onActivePillColor(),
+              icon = { Icon(Icons.Default.Add, contentDescription = null) },
+              text = { Text(AppLabels.Fab.newSchedule, fontWeight = FontWeight.Bold) },
+              modifier = Modifier.testTag(AppTestTags.Fab.ADD_SCHEDULE_FAB),
+            )
+          } else {
+            ExtendedFloatingActionButton(
+              onClick = {
+                if (!state.accessControlConfig.hasPermission(AppPermission.MANAGE_SCHEDULES)) {
+                  onShowStatusMessage(
+                    AppLabels.AccessControl.permissionDeniedMessage(AppPermission.MANAGE_SCHEDULES),
+                  )
+                } else if (!state.hasReadCalendarPermission) {
+                  showCalendarDisclosureDialog = true
+                } else {
+                  editingCalendarRule = null
+                  showCalendarRuleEditor = true
+                }
+              },
+              shape = RoundedCornerShape(22.dp),
+              containerColor = modeAccent,
+              contentColor = state.currentMode.onActivePillColor(),
+              icon = { Icon(Icons.Default.Add, contentDescription = null) },
+              text = { Text(AppLabels.Fab.newCalendarRule, fontWeight = FontWeight.Bold) },
+              modifier = Modifier.testTag(AppTestTags.Fab.ADD_CALENDAR_RULE_FAB),
+            )
+          }
         }
         MainAppTab.LOCATIONS -> {
           ExtendedFloatingActionButton(
@@ -1349,8 +1443,13 @@ internal fun MainDashboardContent(
       MainAppTab.SCHEDULES -> {
         SchedulesTabContent(
           scheduleRules = state.scheduleRules,
+          calendarRules = state.calendarRules,
           profiles = state.profiles,
           canScheduleExactAlarms = state.canScheduleExactAlarms,
+          hasReadCalendarPermission = state.hasReadCalendarPermission,
+          availableCalendars = state.availableCalendars,
+          selectedSubTab = schedulesSubTab,
+          onSelectSubTab = { schedulesSubTab = it },
           onToggleRule = onToggleScheduleRule,
           onEditRule = { rule ->
             if (!state.accessControlConfig.hasPermission(AppPermission.MANAGE_SCHEDULES)) {
@@ -1364,7 +1463,27 @@ internal fun MainDashboardContent(
           },
           onDuplicateRule = onDuplicateScheduleRule,
           onDeleteRule = onDeleteScheduleRule,
+          onToggleCalendarRule = onToggleCalendarRule,
+          onEditCalendarRule = { rule ->
+            if (!state.accessControlConfig.hasPermission(AppPermission.MANAGE_SCHEDULES)) {
+              onShowStatusMessage(
+                AppLabels.AccessControl.permissionDeniedMessage(AppPermission.MANAGE_SCHEDULES),
+              )
+            } else {
+              editingCalendarRule = rule
+              showCalendarRuleEditor = true
+            }
+          },
+          onDeleteCalendarRule = onDeleteCalendarRule,
+          onDuplicateCalendarRule = onDuplicateCalendarRule,
           onRequestExactAlarmPermission = onRequestExactAlarmPermission,
+          onRequestCalendarPermission = {
+            if (!state.hasReadCalendarPermission) {
+              showCalendarDisclosureDialog = true
+            } else {
+              onRequestCalendarPermission()
+            }
+          },
           modifier = Modifier.padding(innerPadding),
         )
       }

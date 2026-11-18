@@ -54,6 +54,13 @@ class SystemAutomationReceiver : BroadcastReceiver() {
             repo.evaluateAndApplyRules(source = TransitionTriggerSource.SCHEDULE)
           }
 
+          Intent.ACTION_PROVIDER_CHANGED -> {
+            val authority = intent.data?.authority
+            if (authority == null || authority == android.provider.CalendarContract.AUTHORITY) {
+              repo.evaluateAndApplyRules(source = TransitionTriggerSource.CALENDAR)
+            }
+          }
+
           ACTION_TIMER_EXPIRED_ALARM -> {
             repo.cancelOrRestoreTimedSession()
           }

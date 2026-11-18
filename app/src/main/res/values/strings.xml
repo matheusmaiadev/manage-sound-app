@@ -38,5 +38,6 @@
     <!-- FABs -->
     <string name="fab_new_profile">Novo Perfil</string>
     <string name="fab_new_schedule">Novo Horário</string>
+    <string name="fab_new_calendar_rule">Nova Regra de Agenda</string>
     <string name="fab_new_location">Novo Local</string>
 </resources>

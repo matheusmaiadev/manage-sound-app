@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -47,6 +48,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -72,6 +76,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.managesoundmode.app.domain.model.CalendarRule
+import com.managesoundmode.app.domain.model.DeviceCalendarInfo
 import com.managesoundmode.app.domain.model.ScheduleRule
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.domain.model.Weekday
@@ -85,99 +91,289 @@ import com.managesoundmode.app.ui.theme.tonalAccentColor
 import com.managesoundmode.app.ui.theme.tonalContainerColor
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SchedulesTabContent(
   scheduleRules: List<ScheduleRule>,
+  calendarRules: List<CalendarRule> = emptyList(),
   profiles: List<SoundProfile>,
   canScheduleExactAlarms: Boolean,
+  hasReadCalendarPermission: Boolean = false,
+  availableCalendars: List<DeviceCalendarInfo> = emptyList(),
+  selectedSubTab: Int = 0,
+  onSelectSubTab: (Int) -> Unit = {},
   onToggleRule: (ScheduleRule, Boolean) -> Unit,
   onEditRule: (ScheduleRule) -> Unit,
   onDeleteRule: (String) -> Unit = {},
   onDuplicateRule: (ScheduleRule) -> Unit = {},
+  onToggleCalendarRule: (CalendarRule, Boolean) -> Unit = { _, _ -> },
+  onEditCalendarRule: (CalendarRule) -> Unit = {},
+  onDeleteCalendarRule: (String) -> Unit = {},
+  onDuplicateCalendarRule: (CalendarRule) -> Unit = {},
   onRequestExactAlarmPermission: () -> Unit,
+  onRequestCalendarPermission: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
-  LazyColumn(
-    modifier = modifier
-      .fillMaxSize()
-      .testTag(AppTestTags.Schedules.LIST),
-    contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 104.dp),
-    verticalArrangement = Arrangement.spacedBy(10.dp),
+  Column(
+    modifier = modifier.fillMaxSize(),
   ) {
-    item {
-      Text(
-        text = AppLabels.Schedules.listHint,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 4.dp, vertical = 4.dp),
-      )
-    }
+    SingleChoiceSegmentedButtonRow(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 18.dp, vertical = 6.dp),
+    ) {
+      SegmentedButton(
+        selected = selectedSubTab == 0,
+        onClick = { onSelectSubTab(0) },
+        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+        modifier = Modifier.testTag(AppTestTags.Schedules.SEGMENT_FIXED),
+        icon = {
+          Icon(
+            imageVector = Icons.Default.AccessTime,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+      ) {
+        Text(AppLabels.Schedules.segmentFixed)
+      }
 
-    if (!canScheduleExactAlarms) {
-      item {
-        Card(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 4.dp)
-            .testTag(AppTestTags.Schedules.EXACT_ALARM_BANNER),
-          shape = RoundedCornerShape(24.dp),
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-          ),
-        ) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Row(
-              modifier = Modifier.weight(1f),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Default.WarningAmber,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-              )
-              Text(
-                text = AppLabels.Schedules.exactAlarmBannerTitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-              )
-            }
-            TextButton(
-              onClick = onRequestExactAlarmPermission,
-              modifier = Modifier.testTag(AppTestTags.Schedules.AUTHORIZE_EXACT_ALARM_BUTTON),
-            ) {
-              Text(AppLabels.Common.authorize, fontWeight = FontWeight.Bold)
-            }
-          }
-        }
+      SegmentedButton(
+        selected = selectedSubTab == 1,
+        onClick = { onSelectSubTab(1) },
+        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+        modifier = Modifier.testTag(AppTestTags.Schedules.SEGMENT_CALENDAR),
+        icon = {
+          Icon(
+            imageVector = Icons.Default.CalendarToday,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+      ) {
+        Text(AppLabels.Schedules.segmentCalendar)
       }
     }
 
-    itemsIndexed(
-      items = scheduleRules,
-      key = { _, rule -> rule.id },
-    ) { _, rule ->
-      val targetProfile = profiles.firstOrNull { it.id == rule.targetProfileId }
-        ?: profiles.firstOrNull()
+    if (selectedSubTab == 0) {
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag(AppTestTags.Schedules.LIST),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 104.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        item {
+          Text(
+            text = AppLabels.Schedules.listHint,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 4.dp, vertical = 4.dp),
+          )
+        }
 
-      GoogleClockScheduleCard(
-        rule = rule,
-        targetProfile = targetProfile,
-        shape = RoundedCornerShape(24.dp),
-        onClick = { onEditRule(rule) },
-        onToggleEnabled = { enabled -> onToggleRule(rule, enabled) },
-        onDuplicate = { onDuplicateRule(rule) },
-        onDelete = { onDeleteRule(rule.id) },
-      )
+        if (!canScheduleExactAlarms) {
+          item {
+            Card(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp)
+                .testTag(AppTestTags.Schedules.EXACT_ALARM_BANNER),
+              shape = RoundedCornerShape(24.dp),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+              ),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(
+                  modifier = Modifier.weight(1f),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.WarningAmber,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                  )
+                  Text(
+                    text = AppLabels.Schedules.exactAlarmBannerTitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                  )
+                }
+                TextButton(
+                  onClick = onRequestExactAlarmPermission,
+                  modifier = Modifier.testTag(AppTestTags.Schedules.AUTHORIZE_EXACT_ALARM_BUTTON),
+                ) {
+                  Text(AppLabels.Common.authorize, fontWeight = FontWeight.Bold)
+                }
+              }
+            }
+          }
+        }
+
+        itemsIndexed(
+          items = scheduleRules,
+          key = { _, rule -> rule.id },
+        ) { _, rule ->
+          val targetProfile = profiles.firstOrNull { it.id == rule.targetProfileId }
+            ?: profiles.firstOrNull()
+
+          GoogleClockScheduleCard(
+            rule = rule,
+            targetProfile = targetProfile,
+            shape = RoundedCornerShape(24.dp),
+            onClick = { onEditRule(rule) },
+            onToggleEnabled = { enabled -> onToggleRule(rule, enabled) },
+            onDuplicate = { onDuplicateRule(rule) },
+            onDelete = { onDeleteRule(rule.id) },
+          )
+        }
+      }
+    } else {
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag(AppTestTags.CalendarRules.LIST),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 104.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        item {
+          Text(
+            text = AppLabels.CalendarRules.tabHint,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 4.dp, vertical = 4.dp),
+          )
+        }
+
+        if (!hasReadCalendarPermission) {
+          item {
+            Card(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp)
+                .testTag(AppTestTags.CalendarRules.PERMISSION_CARD),
+              shape = RoundedCornerShape(24.dp),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+              ),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.CalendarToday,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                  Text(
+                    text = AppLabels.CalendarRules.permissionCardTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                }
+                Text(
+                  text = AppLabels.CalendarRules.permissionCardSubtitle,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                  onClick = onRequestCalendarPermission,
+                  shape = RoundedCornerShape(16.dp),
+                  modifier = Modifier
+                    .align(Alignment.End)
+                    .testTag(AppTestTags.CalendarRules.GRANT_PERMISSION_BUTTON),
+                ) {
+                  Text(
+                    text = AppLabels.CalendarRules.grantPermissionButton,
+                    fontWeight = FontWeight.Bold,
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        if (calendarRules.isEmpty()) {
+          item {
+            Card(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+              shape = RoundedCornerShape(24.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+              ),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.CalendarToday,
+                  contentDescription = null,
+                  modifier = Modifier.size(36.dp),
+                  tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                )
+                Text(
+                  text = AppLabels.CalendarRules.emptyListTitle,
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.Bold,
+                )
+                Text(
+                  text = AppLabels.CalendarRules.emptyListSubtitle,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+              }
+            }
+          }
+        } else {
+          itemsIndexed(
+            items = calendarRules,
+            key = { _, rule -> rule.id },
+          ) { _, rule ->
+            val targetProfile = profiles.firstOrNull { it.id == rule.targetProfileId }
+              ?: profiles.firstOrNull()
+
+            GoogleClockCalendarCard(
+              rule = rule,
+              targetProfile = targetProfile,
+              shape = RoundedCornerShape(24.dp),
+              onClick = { onEditCalendarRule(rule) },
+              onToggleEnabled = { enabled -> onToggleCalendarRule(rule, enabled) },
+              onDuplicate = { onDuplicateCalendarRule(rule) },
+              onDelete = { onDeleteCalendarRule(rule.id) },
+            )
+          }
+        }
+      }
     }
   }
 }
@@ -882,6 +1078,748 @@ private fun TimeBoxCard(
         softWrap = false,
         color = MaterialTheme.colorScheme.onSurface,
       )
+    }
+  }
+}
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
+@Composable
+private fun GoogleClockCalendarCard(
+  rule: CalendarRule,
+  targetProfile: SoundProfile?,
+  shape: RoundedCornerShape,
+  onClick: () -> Unit,
+  onToggleEnabled: (Boolean) -> Unit,
+  onDuplicate: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  val haptics = LocalHapticFeedback.current
+  var showContextMenu by remember { mutableStateOf(false) }
+
+  val modeAccent = targetProfile?.resolvedAudioMode?.tonalAccentColor() ?: MaterialTheme.colorScheme.primary
+  val containerColor = if (rule.enabled) {
+    MaterialTheme.colorScheme.surfaceContainerLow
+  } else {
+    MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.68f)
+  }
+  val borderStroke = if (rule.enabled) {
+    BorderStroke(1.dp, modeAccent.copy(alpha = 0.38f))
+  } else {
+    BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+  }
+
+  Card(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(shape)
+      .combinedClickable(
+        onClick = onClick,
+        onLongClick = {
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          showContextMenu = true
+        },
+      )
+      .testTag(AppTestTags.CalendarRules.card(rule.id)),
+    shape = shape,
+    border = borderStroke,
+    colors = CardDefaults.cardColors(containerColor = containerColor),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      // Linha 1: Avatar Circular + Nome da Regra + Menu (⋮)
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(34.dp)
+              .clip(CircleShape)
+              .background(
+                if (rule.enabled) {
+                  modeAccent.copy(alpha = 0.16f)
+                } else {
+                  MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+              ),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = targetProfile?.let { profileIconForKey(it.iconKey) } ?: Icons.Default.CalendarToday,
+              contentDescription = null,
+              tint = if (rule.enabled) {
+                modeAccent
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+              modifier = Modifier.size(18.dp),
+            )
+          }
+          Text(
+            text = rule.name,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = if (rule.enabled) {
+              MaterialTheme.colorScheme.onSurface
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+          )
+        }
+
+        Box {
+          IconButton(
+            onClick = { showContextMenu = true },
+            modifier = Modifier
+              .size(34.dp)
+              .testTag(AppTestTags.CalendarRules.optionsButton(rule.id)),
+          ) {
+            Icon(
+              imageVector = Icons.Default.MoreVert,
+              contentDescription = AppLabels.CalendarRules.optionsContentDescription(rule.name),
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+
+          DropdownMenu(
+            expanded = showContextMenu,
+            onDismissRequest = { showContextMenu = false },
+          ) {
+            DropdownMenuItem(
+              text = { Text(AppLabels.CalendarRules.editRuleMenu) },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Outlined.Edit,
+                  contentDescription = null,
+                )
+              },
+              onClick = {
+                showContextMenu = false
+                onClick()
+              },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.menuEditItem(rule.id)),
+            )
+            DropdownMenuItem(
+              text = { Text(AppLabels.CalendarRules.duplicateRuleMenu) },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.ContentCopy,
+                  contentDescription = null,
+                )
+              },
+              onClick = {
+                showContextMenu = false
+                onDuplicate()
+              },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.menuDuplicateItem(rule.id)),
+            )
+            DropdownMenuItem(
+              text = {
+                Text(
+                  if (rule.enabled) {
+                    AppLabels.CalendarRules.disableRuleMenu
+                  } else {
+                    AppLabels.CalendarRules.enableRuleMenu
+                  },
+                )
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = null,
+                )
+              },
+              onClick = {
+                showContextMenu = false
+                onToggleEnabled(!rule.enabled)
+              },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.menuToggleItem(rule.id)),
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+              text = {
+                Text(
+                  text = AppLabels.CalendarRules.deleteRuleMenu,
+                  color = MaterialTheme.colorScheme.error,
+                )
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.DeleteOutline,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.error,
+                )
+              },
+              onClick = {
+                showContextMenu = false
+                onDelete()
+              },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.menuDeleteItem(rule.id)),
+            )
+          }
+        }
+      }
+
+      // Linha 2: Resumo do Perfil Alvo + Switch
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = targetProfile?.let { "${it.name} (${it.resolvedSoundState.title})" } ?: "",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = if (rule.enabled) FontWeight.SemiBold else FontWeight.Normal,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 8.dp),
+          color = if (rule.enabled) {
+            MaterialTheme.colorScheme.onSurface
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+          },
+        )
+
+        M3CheckSwitch(
+          checked = rule.enabled,
+          onCheckedChange = onToggleEnabled,
+          modifier = Modifier.testTag(AppTestTags.CalendarRules.switch(rule.id)),
+        )
+      }
+
+      // Linha 3: Badges e Chips Semânticos
+      FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        // Chip Ocupado / Qualquer
+        CalendarBadgeChip(
+          text = if (rule.busyOnly) AppLabels.CalendarRules.chipBusyOnly else AppLabels.CalendarRules.chipAnyAvailability,
+          enabled = rule.enabled,
+          accent = modeAccent,
+        )
+
+        // Chip Agendas
+        CalendarBadgeChip(
+          text = if (rule.calendarIds.isEmpty()) {
+            AppLabels.CalendarRules.chipAllCalendars
+          } else {
+            AppLabels.CalendarRules.chipCalendarsCount(rule.calendarIds.size)
+          },
+          enabled = rule.enabled,
+          accent = modeAccent,
+        )
+
+        // Chip Palavra-chave (se houver)
+        if (rule.keywordFilter.isNotBlank()) {
+          CalendarBadgeChip(
+            text = AppLabels.CalendarRules.chipKeyword(rule.keywordFilter),
+            enabled = rule.enabled,
+            accent = modeAccent,
+          )
+        }
+
+        // Chip Ignora dia inteiro
+        if (rule.ignoreAllDayEvents) {
+          CalendarBadgeChip(
+            text = AppLabels.CalendarRules.chipIgnoreAllDay,
+            enabled = rule.enabled,
+            accent = modeAccent,
+          )
+        }
+
+        // Chip Alta Prioridade
+        if (rule.highPriority) {
+          CalendarBadgeChip(
+            text = AppLabels.CalendarRules.chipHighPriority,
+            enabled = rule.enabled,
+            accent = modeAccent,
+            isHighlight = true,
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun CalendarBadgeChip(
+  text: String,
+  enabled: Boolean,
+  accent: androidx.compose.ui.graphics.Color,
+  isHighlight: Boolean = false,
+) {
+  Surface(
+    shape = RoundedCornerShape(50),
+    color = when {
+      !enabled -> MaterialTheme.colorScheme.surfaceContainerHighest
+      isHighlight -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
+      else -> MaterialTheme.colorScheme.surfaceContainerHigh
+    },
+    border = when {
+      !enabled -> null
+      isHighlight -> BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+      else -> BorderStroke(1.dp, accent.copy(alpha = 0.25f))
+    },
+  ) {
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelSmall,
+      fontWeight = if (isHighlight) FontWeight.Bold else FontWeight.Medium,
+      maxLines = 1,
+      softWrap = false,
+      color = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+        isHighlight -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onSurface
+      },
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+    )
+  }
+}
+
+@Composable
+internal fun CalendarDisclosureDialog(
+  onAccept: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    modifier = Modifier.testTag(AppTestTags.CalendarRules.DISCLOSURE_DIALOG),
+    icon = {
+      Icon(
+        imageVector = Icons.Default.CalendarToday,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+      )
+    },
+    title = {
+      Text(
+        text = AppLabels.CalendarRules.disclosureTitle,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+      )
+    },
+    text = {
+      Text(
+        text = AppLabels.CalendarRules.disclosureMessage,
+        style = MaterialTheme.typography.bodyMedium,
+      )
+    },
+    confirmButton = {
+      Button(
+        onClick = onAccept,
+        modifier = Modifier.testTag(AppTestTags.CalendarRules.ACCEPT_DISCLOSURE_BUTTON),
+      ) {
+        Text(AppLabels.CalendarRules.disclosureContinue, fontWeight = FontWeight.Bold)
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        modifier = Modifier.testTag(AppTestTags.CalendarRules.DISMISS_DISCLOSURE_BUTTON),
+      ) {
+        Text(AppLabels.CalendarRules.disclosureDismiss)
+      }
+    },
+  )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+internal fun CalendarRuleEditorDialog(
+  initialRule: CalendarRule?,
+  profiles: List<SoundProfile>,
+  availableCalendars: List<DeviceCalendarInfo> = emptyList(),
+  onConfirm: (CalendarRule) -> Unit,
+  onAutoSave: ((CalendarRule) -> Unit)? = null,
+  onDelete: ((String) -> Unit)? = null,
+  onDismiss: () -> Unit,
+) {
+  val isEditing = initialRule != null
+  var name by rememberSaveable {
+    mutableStateOf(initialRule?.name ?: "")
+  }
+  var selectedCalendarIds by remember {
+    mutableStateOf(initialRule?.calendarIds ?: emptySet())
+  }
+  var busyOnly by rememberSaveable {
+    mutableStateOf(initialRule?.busyOnly ?: true)
+  }
+  var ignoreAllDayEvents by rememberSaveable {
+    mutableStateOf(initialRule?.ignoreAllDayEvents ?: true)
+  }
+  var keywordFilter by rememberSaveable {
+    mutableStateOf(initialRule?.keywordFilter ?: "")
+  }
+  var selectedProfileId by rememberSaveable {
+    mutableStateOf(initialRule?.targetProfileId ?: profiles.firstOrNull()?.id ?: "")
+  }
+  var highPriority by rememberSaveable {
+    mutableStateOf(initialRule?.highPriority ?: false)
+  }
+
+  val selectedProfile = profiles.firstOrNull { it.id == selectedProfileId }
+  val activeAccent = selectedProfile?.resolvedAudioMode?.tonalAccentColor()
+    ?: MaterialTheme.colorScheme.primary
+
+  fun buildRule(): CalendarRule {
+    return CalendarRule(
+      id = initialRule?.id ?: java.util.UUID.randomUUID().toString(),
+      name = name.trim().ifEmpty {
+        selectedProfile?.name ?: "Calendar Automation"
+      },
+      enabled = initialRule?.enabled ?: true,
+      calendarIds = selectedCalendarIds,
+      busyOnly = busyOnly,
+      ignoreAllDayEvents = ignoreAllDayEvents,
+      keywordFilter = keywordFilter.trim(),
+      targetProfileId = selectedProfileId,
+      highPriority = highPriority,
+    )
+  }
+
+  fun notifyAutoSaveIfEditing() {
+    if (isEditing) {
+      onAutoSave?.invoke(buildRule())
+    }
+  }
+
+  Dialog(
+    onDismissRequest = {
+      notifyAutoSaveIfEditing()
+      onDismiss()
+    },
+    properties = DialogProperties(
+      usePlatformDefaultWidth = false,
+      dismissOnClickOutside = false,
+      dismissOnBackPress = true,
+    ),
+  ) {
+    Scaffold(
+      modifier = Modifier.fillMaxSize(),
+      containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+      topBar = {
+        TopAppBar(
+          navigationIcon = {
+            IconButton(
+              onClick = {
+                notifyAutoSaveIfEditing()
+                onDismiss()
+              },
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = AppLabels.Common.back,
+              )
+            }
+          },
+          title = {
+            Column {
+              Text(
+                text = if (isEditing) {
+                  AppLabels.CalendarRules.editorTitleEdit
+                } else {
+                  AppLabels.CalendarRules.editorTitleNew
+                },
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              if (isEditing) {
+                Text(
+                  text = AppLabels.Common.autoSavedSubtitle,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = activeAccent,
+                )
+              }
+            }
+          },
+          actions = {
+            if (isEditing && onDelete != null) {
+              IconButton(
+                onClick = { onDelete(initialRule.id) },
+                modifier = Modifier.testTag(AppTestTags.CalendarRules.DELETE_TOP_BUTTON),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.DeleteOutline,
+                  contentDescription = AppLabels.CalendarRules.deleteRuleMenu,
+                  tint = MaterialTheme.colorScheme.error,
+                )
+              }
+            } else if (!isEditing) {
+              TextButton(
+                onClick = { onConfirm(buildRule()) },
+                modifier = Modifier.testTag(AppTestTags.CalendarRules.CONFIRM_SAVE_BUTTON),
+              ) {
+                Text(AppLabels.CalendarRules.confirmSave, fontWeight = FontWeight.Bold)
+              }
+            }
+          },
+          colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+          ),
+        )
+      },
+    ) { innerPadding ->
+      Column(
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(innerPadding)
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+      ) {
+        OutlinedTextField(
+          value = name,
+          onValueChange = {
+            name = it
+            notifyAutoSaveIfEditing()
+          },
+          label = { Text(AppLabels.CalendarRules.nameLabel) },
+          placeholder = { Text(AppLabels.CalendarRules.namePlaceholder) },
+          singleLine = true,
+          shape = RoundedCornerShape(18.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag(AppTestTags.CalendarRules.NAME_INPUT),
+        )
+
+        // Agendas do Dispositivo
+        if (availableCalendars.isNotEmpty()) {
+          Text(
+            text = AppLabels.CalendarRules.calendarsSectionTitle,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            FilterChip(
+              selected = selectedCalendarIds.isEmpty(),
+              onClick = {
+                selectedCalendarIds = emptySet()
+                notifyAutoSaveIfEditing()
+              },
+              label = { Text(AppLabels.CalendarRules.allCalendarsOption) },
+            )
+
+            availableCalendars.forEach { cal ->
+              val isSelected = cal.id in selectedCalendarIds
+              FilterChip(
+                selected = isSelected,
+                onClick = {
+                  selectedCalendarIds = if (isSelected) {
+                    selectedCalendarIds - cal.id
+                  } else {
+                    selectedCalendarIds + cal.id
+                  }
+                  notifyAutoSaveIfEditing()
+                },
+                label = { Text(cal.displayName) },
+                modifier = Modifier.testTag(AppTestTags.CalendarRules.calendarFilterChip(cal.id)),
+              )
+            }
+          }
+        }
+
+        // Filtro por palavra-chave
+        OutlinedTextField(
+          value = keywordFilter,
+          onValueChange = {
+            keywordFilter = it
+            notifyAutoSaveIfEditing()
+          },
+          label = { Text(AppLabels.CalendarRules.keywordFilterLabel) },
+          placeholder = { Text(AppLabels.CalendarRules.keywordFilterPlaceholder) },
+          singleLine = true,
+          shape = RoundedCornerShape(18.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag(AppTestTags.CalendarRules.KEYWORD_INPUT),
+        )
+
+        // Perfil de som
+        Text(
+          text = AppLabels.CalendarRules.targetProfileTitle,
+          style = MaterialTheme.typography.titleSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          profiles.forEach { profile ->
+            val selected = selectedProfileId == profile.id
+            FilterChip(
+              selected = selected,
+              onClick = {
+                selectedProfileId = profile.id
+                notifyAutoSaveIfEditing()
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = profileIconForKey(profile.iconKey),
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = { Text(profile.name) },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.profileChip(profile.id)),
+            )
+          }
+        }
+
+        // Switch: Ocupado apenas
+        Surface(
+          shape = RoundedCornerShape(22.dp),
+          color = MaterialTheme.colorScheme.surfaceContainerLow,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(
+              modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+            ) {
+              Text(
+                text = AppLabels.CalendarRules.busyOnlyTitle,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = AppLabels.CalendarRules.busyOnlySubtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            M3CheckSwitch(
+              checked = busyOnly,
+              onCheckedChange = {
+                busyOnly = it
+                notifyAutoSaveIfEditing()
+              },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.BUSY_ONLY_SWITCH),
+            )
+          }
+        }
+
+        // Switch: Ignorar dia inteiro
+        Surface(
+          shape = RoundedCornerShape(22.dp),
+          color = MaterialTheme.colorScheme.surfaceContainerLow,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(
+              modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+            ) {
+              Text(
+                text = AppLabels.CalendarRules.ignoreAllDayTitle,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = AppLabels.CalendarRules.ignoreAllDaySubtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            M3CheckSwitch(
+              checked = ignoreAllDayEvents,
+              onCheckedChange = {
+                ignoreAllDayEvents = it
+                notifyAutoSaveIfEditing()
+              },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.IGNORE_ALL_DAY_SWITCH),
+            )
+          }
+        }
+
+        // Switch: Alta prioridade
+        Surface(
+          shape = RoundedCornerShape(22.dp),
+          color = MaterialTheme.colorScheme.surfaceContainerLow,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(
+              modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+            ) {
+              Text(
+                text = AppLabels.CalendarRules.highPriorityTitle,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = AppLabels.CalendarRules.highPrioritySubtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            M3CheckSwitch(
+              checked = highPriority,
+              onCheckedChange = {
+                highPriority = it
+                notifyAutoSaveIfEditing()
+              },
+              modifier = Modifier.testTag(AppTestTags.CalendarRules.HIGH_PRIORITY_SWITCH),
+            )
+          }
+        }
+
+        if (!isEditing) {
+          Button(
+            onClick = { onConfirm(buildRule()) },
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(52.dp),
+          ) {
+            Text(AppLabels.CalendarRules.confirmSave, fontWeight = FontWeight.Bold)
+          }
+        }
+      }
     }
   }
 }

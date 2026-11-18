@@ -22,6 +22,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
+    <!-- [CAL-01] Permissão opcional Just-in-Time para automação contextual por eventos de Calendário -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
     <!-- Necessário para o Mapa Interativo OpenStreetMap e busca gratuita de endereços em Locais -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -83,6 +86,13 @@
                 <action android:name="com.managesoundmode.app.action.WIDGET_TOGGLE_VIBRATE" />
                 <action android:name="com.managesoundmode.app.action.WIDGET_CYCLE_MODE" />
                 <action android:name="com.managesoundmode.app.action.ACTIVATE_PROFILE" />
+            </intent-filter>
+            <!-- [CAL-01] Notificação do Provedor de Calendário do Android (CalendarContract) -->
+            <intent-filter>
+                <action android:name="android.intent.action.PROVIDER_CHANGED" />
+                <data
+                    android:host="com.android.calendar"
+                    android:scheme="content" />
             </intent-filter>
         </receiver>
 

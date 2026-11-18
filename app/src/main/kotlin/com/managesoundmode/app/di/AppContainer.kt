@@ -5,7 +5,9 @@ import com.managesoundmode.app.data.local.DataStoreSoundPreferencesDataSource
 import com.managesoundmode.app.data.local.SoundPreferencesDataSource
 import com.managesoundmode.app.data.repository.DefaultSoundModeRepository
 import com.managesoundmode.app.data.repository.SoundModeRepository
+import com.managesoundmode.app.data.system.AndroidCalendarEventsProvider
 import com.managesoundmode.app.data.system.AndroidSoundSystemController
+import com.managesoundmode.app.data.system.CalendarEventsProvider
 import com.managesoundmode.app.data.system.SoundSystemController
 import com.managesoundmode.app.domain.model.SoundProfile
 import com.managesoundmode.app.system.AndroidVolumePreviewPlayer
@@ -22,6 +24,7 @@ import kotlinx.coroutines.flow.first
 
 interface AppContainer {
   val soundSystemController: SoundSystemController
+  val calendarEventsProvider: CalendarEventsProvider
   val preferencesDataSource: SoundPreferencesDataSource
   val volumePreviewPlayer: VolumePreviewPlayer
   val soundModeRepository: SoundModeRepository
@@ -33,6 +36,10 @@ class DefaultAppContainer(
 
   override val soundSystemController: SoundSystemController by lazy {
     AndroidSoundSystemController(appContext)
+  }
+
+  override val calendarEventsProvider: CalendarEventsProvider by lazy {
+    AndroidCalendarEventsProvider(appContext)
   }
 
   override val preferencesDataSource: SoundPreferencesDataSource by lazy {
@@ -47,6 +54,7 @@ class DefaultAppContainer(
     DefaultSoundModeRepository(
       systemController = soundSystemController,
       preferencesDataSource = preferencesDataSource,
+      calendarEventsProvider = calendarEventsProvider,
       onScheduleAutoRestore = { minutes -> RestoreSoundModeWorker.schedule(appContext, minutes) },
       onCancelAutoRestore = { RestoreSoundModeWorker.cancel(appContext) },
       onScheduleExactTimerAlarm = { endsAtMillis ->
@@ -55,8 +63,8 @@ class DefaultAppContainer(
       onCancelExactTimerAlarm = {
         ExactRuleAlarmScheduler.cancelTimerExpiration(appContext)
       },
-      onRescheduleRuleAlarms = { rules ->
-        ExactRuleAlarmScheduler.scheduleNextTransition(appContext, rules)
+      onRescheduleRuleAlarms = { rules, nextCalendarBoundary ->
+        ExactRuleAlarmScheduler.scheduleNextTransition(appContext, rules, nextCalendarBoundary)
       },
       onSmartRestorePrompt = { mode, mediaAutoMuted ->
         SmartNotificationManager.showSmartRestorePrompt(

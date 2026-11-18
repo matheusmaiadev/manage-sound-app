@@ -49,6 +49,7 @@ interface SoundSystemController {
   fun hasLocationPermission(): Boolean = false
   fun hasBackgroundLocationPermission(): Boolean = false
   fun hasNotificationPermission(): Boolean = true
+  fun hasReadCalendarPermission(): Boolean = false
   fun isMusicActive(): Boolean = false
   fun isBluetoothHeadsetConnected(): Boolean = false
   fun syncFallbackSoundVibrate(enabled: Boolean) {}
@@ -234,6 +235,13 @@ class AndroidSoundSystemController(
     } else {
       true
     }
+  }
+
+  override fun hasReadCalendarPermission(): Boolean {
+    return ContextCompat.checkSelfPermission(
+      appContext,
+      Manifest.permission.READ_CALENDAR,
+    ) == PackageManager.PERMISSION_GRANTED
   }
 
   override fun isMusicActive(): Boolean {

@@ -145,6 +145,7 @@ private enum class HistorySourceFilter {
   ALL,
   MANUAL,
   SCHEDULE,
+  CALENDAR,
   LOCATION,
   SHORTCUTS,
 }
@@ -181,6 +182,7 @@ internal fun SettingsAndProfilesTabContent(
   onImportBackupJson: (String) -> Unit = {},
   onShowStatusMessage: (String) -> Unit = {},
   onRequestLocationPermission: () -> Unit = {},
+  onRequestCalendarPermission: () -> Unit = {},
   onReopenOnboarding: () -> Unit = {},
   onSetAccessRole: (AppAccessRole) -> Unit = {},
   onToggleAccessPermission: (AppPermission, Boolean) -> Unit = { _, _ -> },
@@ -286,6 +288,7 @@ internal fun SettingsAndProfilesTabContent(
       onImportBackupJson = onImportBackupJson,
       onShowStatusMessage = onShowStatusMessage,
       onRequestLocationPermission = onRequestLocationPermission,
+      onRequestCalendarPermission = onRequestCalendarPermission,
       onReopenOnboarding = {
         openCategory = null
         onReopenOnboarding()
@@ -733,6 +736,7 @@ internal fun SettingsCategoryFullScreenDialog(
   onImportBackupJson: (String) -> Unit = {},
   onShowStatusMessage: (String) -> Unit = {},
   onRequestLocationPermission: () -> Unit = {},
+  onRequestCalendarPermission: () -> Unit = {},
   onReopenOnboarding: () -> Unit = {},
   onSetAccessRole: (AppAccessRole) -> Unit = {},
   onToggleAccessPermission: (AppPermission, Boolean) -> Unit = { _, _ -> },
@@ -891,6 +895,7 @@ internal fun SettingsCategoryFullScreenDialog(
             onRequestNotificationPermission = onRequestNotificationPermission,
             onRequestExactAlarmPermission = onRequestExactAlarmPermission,
             onRequestLocationPermission = onRequestLocationPermission,
+            onRequestCalendarPermission = onRequestCalendarPermission,
             onReopenOnboarding = {
               onDismiss()
               onReopenOnboarding()
@@ -2662,6 +2667,7 @@ private fun PermissionsDiagnosticSubScreen(
   onRequestExactAlarmPermission: () -> Unit,
   onRequestWriteSettingsPermission: () -> Unit = {},
   onRequestLocationPermission: () -> Unit = {},
+  onRequestCalendarPermission: () -> Unit = {},
   onReopenOnboarding: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
@@ -2680,7 +2686,7 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.pendingTapToAuthorizeStatus
       },
       isHealthy = state.hasDndPermission,
-      shape = groupedCardShape(index = 0, totalCount = 6),
+      shape = groupedCardShape(index = 0, totalCount = 7),
       onClick = onRequestDndPermission,
     )
 
@@ -2692,7 +2698,7 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.writeSettingsPermissionPendingSubtitle
       },
       isHealthy = state.canWriteSystemSettings,
-      shape = groupedCardShape(index = 1, totalCount = 6),
+      shape = groupedCardShape(index = 1, totalCount = 7),
       testTag = AppTestTags.Settings.WRITE_SETTINGS_PERMISSION_CARD,
       onClick = onRequestWriteSettingsPermission,
     )
@@ -2705,7 +2711,7 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.smartNotificationsPendingSubtitle
       },
       isHealthy = state.hasNotificationPermission,
-      shape = groupedCardShape(index = 2, totalCount = 6),
+      shape = groupedCardShape(index = 2, totalCount = 7),
       onClick = onRequestNotificationPermission,
     )
 
@@ -2717,7 +2723,7 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.pendingTapToAuthorizeStatus
       },
       isHealthy = state.canScheduleExactAlarms,
-      shape = groupedCardShape(index = 3, totalCount = 6),
+      shape = groupedCardShape(index = 3, totalCount = 7),
       onClick = onRequestExactAlarmPermission,
     )
 
@@ -2729,15 +2735,28 @@ private fun PermissionsDiagnosticSubScreen(
         AppLabels.Settings.locationPermissionPendingSubtitle
       },
       isHealthy = state.hasLocationPermission,
-      shape = groupedCardShape(index = 4, totalCount = 6),
+      shape = groupedCardShape(index = 4, totalCount = 7),
       onClick = onRequestLocationPermission,
+    )
+
+    HealthCheckItemCard(
+      title = AppLabels.Settings.calendarPermissionTitle,
+      subtitle = if (state.hasReadCalendarPermission) {
+        AppLabels.Settings.grantedStatus
+      } else {
+        AppLabels.Settings.optionalCalendarPermissionSubtitle
+      },
+      isHealthy = true,
+      shape = groupedCardShape(index = 5, totalCount = 7),
+      testTag = AppTestTags.Settings.GRANT_CALENDAR_PERMISSION_BUTTON,
+      onClick = onRequestCalendarPermission,
     )
 
     HealthCheckItemCard(
       title = AppLabels.Settings.onDeviceStorageTitle,
       subtitle = AppLabels.Settings.onDeviceStorageSubtitle,
       isHealthy = true,
-      shape = groupedCardShape(index = 5, totalCount = 6),
+      shape = groupedCardShape(index = 6, totalCount = 7),
       onClick = {},
     )
 
@@ -2781,6 +2800,7 @@ private fun TransitionHistorySubScreen(
         TransitionTriggerSource.SCHEDULE,
         TransitionTriggerSource.RESTORE,
       )
+      HistorySourceFilter.CALENDAR -> entry.source == TransitionTriggerSource.CALENDAR
       HistorySourceFilter.LOCATION -> entry.source == TransitionTriggerSource.LOCATION
       HistorySourceFilter.SHORTCUTS -> entry.source in setOf(
         TransitionTriggerSource.QUICK_TILE,
@@ -2808,6 +2828,7 @@ private fun TransitionHistorySubScreen(
             HistorySourceFilter.ALL -> AppLabels.Settings.filterAll
             HistorySourceFilter.MANUAL -> AppLabels.Settings.filterManual
             HistorySourceFilter.SCHEDULE -> AppLabels.Settings.filterSchedule
+            HistorySourceFilter.CALENDAR -> AppLabels.Settings.filterCalendar
             HistorySourceFilter.LOCATION -> AppLabels.Settings.filterLocation
             HistorySourceFilter.SHORTCUTS -> AppLabels.Settings.filterShortcuts
           }

@@ -12,6 +12,8 @@ import com.managesoundmode.app.domain.model.AccessControlConfig
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.CalendarRule
+import com.managesoundmode.app.domain.model.DeviceCalendarInfo
 import com.managesoundmode.app.domain.model.DeviceSoundSnapshot
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
@@ -66,7 +68,10 @@ sealed interface MainScreenUiState {
     val activeRuleSubtitle: String? = null,
     val isManuallyOverridden: Boolean = false,
     val scheduleRules: List<ScheduleRule> = emptyList(),
+    val calendarRules: List<CalendarRule> = emptyList(),
     val locationRules: List<LocationRule> = emptyList(),
+    val hasReadCalendarPermission: Boolean = false,
+    val availableCalendars: List<DeviceCalendarInfo> = emptyList(),
     val restorePolicy: RestorePolicy = RestorePolicy.DEFAULT_PROFILE,
     val defaultDayProfileId: String = SoundProfile.DEFAULT_DAY_PROFILE_ID,
     val transitionLogs: List<TransitionLogEntry> = emptyList(),
@@ -149,7 +154,20 @@ class MainScreenViewModel(
 
   private val feedbackMessage = MutableStateFlow<String?>(null)
   private val writeSettingsPromptRequested = MutableStateFlow(false)
+  private val availableCalendarsState = MutableStateFlow<List<DeviceCalendarInfo>>(emptyList())
   private val latchedMostUsedStreams = AtomicReference<List<VolumeStreamType>?>(null)
+
+  init {
+    loadVisibleCalendars()
+  }
+
+  fun loadVisibleCalendars() {
+    viewModelScope.launch {
+      if (repository.hasReadCalendarPermission()) {
+        availableCalendarsState.value = repository.queryVisibleCalendars()
+      }
+    }
+  }
 
   private val transientOverlayFlow = combine(
     feedbackMessage,
@@ -168,7 +186,8 @@ class MainScreenViewModel(
     repository.profilesStream,
     repository.preferencesStream,
     transientOverlayFlow,
-  ) { snapshot: DeviceSoundSnapshot, profiles: List<SoundProfile>, prefs: PersistedSoundPrefs, overlay: TransientUiOverlay ->
+    availableCalendarsState,
+  ) { snapshot: DeviceSoundSnapshot, profiles: List<SoundProfile>, prefs: PersistedSoundPrefs, overlay: TransientUiOverlay, calendars: List<DeviceCalendarInfo> ->
     val resolvedLanguage = runCatching { AppLanguage.valueOf(prefs.appLanguageCode) }
       .getOrDefault(AppLanguage.PT_BR)
     if (AppLabels.currentLanguage != resolvedLanguage) {
@@ -212,7 +231,10 @@ class MainScreenViewModel(
       activeRuleSubtitle = snapshot.activeRuleSubtitle,
       isManuallyOverridden = snapshot.isManuallyOverridden,
       scheduleRules = prefs.scheduleRules,
+      calendarRules = prefs.calendarRules,
       locationRules = prefs.locationRules,
+      hasReadCalendarPermission = repository.hasReadCalendarPermission(),
+      availableCalendars = calendars,
       restorePolicy = prefs.restorePolicy,
       defaultDayProfileId = prefs.defaultDayProfileId,
       transitionLogs = prefs.transitionLogs,
@@ -795,6 +817,56 @@ class MainScreenViewModel(
       repository.deleteScheduleRule(ruleId)
         .onSuccess {
           feedbackMessage.value = "Horário removido"
+        }
+    }
+  }
+
+  fun onUpsertCalendarRule(rule: CalendarRule, showFeedback: Boolean = true) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      repository.upsertCalendarRule(rule)
+        .onSuccess {
+          if (showFeedback) {
+            feedbackMessage.value = "Regra de agenda '${rule.name}' salva"
+          }
+        }
+        .onFailure { error ->
+          feedbackMessage.value = error.message ?: "Erro ao salvar regra de agenda"
+        }
+    }
+  }
+
+  fun onToggleCalendarRule(rule: CalendarRule, enabled: Boolean) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      repository.upsertCalendarRule(rule.copy(enabled = enabled))
+        .onSuccess {
+          val stateLabel = if (enabled) "ativada" else "desativada"
+          feedbackMessage.value = "Regra de agenda '${rule.name}' $stateLabel"
+        }
+    }
+  }
+
+  fun onDeleteCalendarRule(ruleId: String) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      repository.deleteCalendarRule(ruleId)
+        .onSuccess {
+          feedbackMessage.value = "Regra de agenda removida"
+        }
+    }
+  }
+
+  fun onDuplicateCalendarRule(rule: CalendarRule) {
+    viewModelScope.launch {
+      if (!checkAccessPermission(AppPermission.MANAGE_SCHEDULES)) return@launch
+      val duplicated = rule.copy(
+        id = "cal_${System.currentTimeMillis()}",
+        name = "${rule.name} (Cópia)",
+      )
+      repository.upsertCalendarRule(duplicated)
+        .onSuccess {
+          feedbackMessage.value = "Regra de agenda duplicada com sucesso"
         }
     }
   }

@@ -10,6 +10,7 @@ import com.managesoundmode.app.domain.model.AccessControlConfig
 import com.managesoundmode.app.domain.model.AppAccessRole
 import com.managesoundmode.app.domain.model.AppPermission
 import com.managesoundmode.app.domain.model.BaseAudioMode
+import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SavedStateSnapshot
@@ -45,6 +46,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -1645,6 +1647,83 @@ class MainScreenViewModelTest {
       AppLabels.currentLanguage = AppLanguage.PT_BR
     }
   }
+
+  @Test
+  fun calendarRules_crudAndDuplicate_updatesPreferencesAndUiState() = runTest {
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    val readyInitial = viewModel.uiState.value as MainScreenUiState.Ready
+    assertTrue(readyInitial.calendarRules.isEmpty())
+
+    val rule = CalendarRule(
+      id = "cal_1",
+      name = "Reunião de Trabalho",
+      calendarIds = setOf(1L),
+      busyOnly = true,
+      ignoreAllDayEvents = true,
+      keywordFilter = "Daily",
+      targetProfileId = "preset_silent",
+      highPriority = false,
+    )
+    viewModel.onUpsertCalendarRule(rule)
+
+    val stateAfterAdd = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(1, stateAfterAdd.calendarRules.size)
+    assertEquals("Reunião de Trabalho", stateAfterAdd.calendarRules[0].name)
+    assertTrue(stateAfterAdd.calendarRules[0].enabled)
+
+    // Toggle
+    viewModel.onToggleCalendarRule(stateAfterAdd.calendarRules[0], false)
+    val stateAfterToggle = viewModel.uiState.value as MainScreenUiState.Ready
+    assertFalse(stateAfterToggle.calendarRules[0].enabled)
+
+    // Duplicate
+    viewModel.onDuplicateCalendarRule(stateAfterToggle.calendarRules[0])
+    val stateAfterDuplicate = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(2, stateAfterDuplicate.calendarRules.size)
+    val duplicated = stateAfterDuplicate.calendarRules.first { it.id != "cal_1" }
+    assertTrue(duplicated.name.contains("Reunião de Trabalho"))
+
+    // Delete
+    viewModel.onDeleteCalendarRule("cal_1")
+    val stateAfterDelete = viewModel.uiState.value as MainScreenUiState.Ready
+    assertEquals(1, stateAfterDelete.calendarRules.size)
+    assertEquals(duplicated.id, stateAfterDelete.calendarRules[0].id)
+  }
+
+  @Test
+  fun calendarRules_rbacCheck_manageSchedulesRestrictedBlocksMutations() = runTest {
+    // Papel VIEWER sem MANAGE_SCHEDULES
+    val restrictedConfig = AccessControlConfig(
+      activeRole = AppAccessRole.VIEWER,
+      grantedPermissions = emptySet(),
+    )
+    fakePreferences.setAccessControlConfig(restrictedConfig)
+
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      viewModel.uiState.collect()
+    }
+
+    val ready = viewModel.uiState.value as MainScreenUiState.Ready
+    assertFalse(ready.accessControlConfig.hasPermission(AppPermission.MANAGE_SCHEDULES))
+
+    val rule = CalendarRule(
+      id = "blocked_cal",
+      name = "Não deve salvar",
+      targetProfileId = "preset_silent",
+    )
+    viewModel.onUpsertCalendarRule(rule)
+
+    // Feedback de permissão negada exibido e nenhuma regra adicionada
+    val stateWithFeedback = viewModel.uiState.value as MainScreenUiState.Ready
+    assertTrue(stateWithFeedback.calendarRules.isEmpty())
+    assertEquals(
+      AppLabels.AccessControl.permissionDeniedMessage(AppPermission.MANAGE_SCHEDULES),
+      stateWithFeedback.statusMessage,
+    )
+  }
 }
 
 private class FakeSoundSystemController : SoundSystemController {
@@ -1782,6 +1861,19 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
   override suspend fun deleteLocationRule(ruleId: String) {
     state.value = state.value.copy(
       locationRules = state.value.locationRules.filterNot { it.id == ruleId },
+    )
+  }
+
+  override suspend fun upsertCalendarRule(rule: CalendarRule) {
+    val existing = state.value.calendarRules.toMutableList()
+    val idx = existing.indexOfFirst { it.id == rule.id }
+    if (idx >= 0) existing[idx] = rule else existing.add(rule)
+    state.value = state.value.copy(calendarRules = existing)
+  }
+
+  override suspend fun deleteCalendarRule(ruleId: String) {
+    state.value = state.value.copy(
+      calendarRules = state.value.calendarRules.filterNot { it.id == ruleId },
     )
   }
 
@@ -1956,6 +2048,7 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       deletedProfileIds = current.deletedProfileIds,
       scheduleRules = current.scheduleRules,
       locationRules = current.locationRules,
+      calendarRules = current.calendarRules,
       restorePolicy = current.restorePolicy,
       defaultDayProfileId = current.defaultDayProfileId,
       useDynamicColor = current.useDynamicColor,
@@ -1995,6 +2088,7 @@ private class FakeSoundPreferencesDataSource : SoundPreferencesDataSource {
       deletedProfileIds = payload.deletedProfileIds,
       scheduleRules = payload.scheduleRules,
       locationRules = payload.locationRules,
+      calendarRules = payload.calendarRules,
       restorePolicy = payload.restorePolicy,
       defaultDayProfileId = payload.defaultDayProfileId,
       useDynamicColor = payload.useDynamicColor,

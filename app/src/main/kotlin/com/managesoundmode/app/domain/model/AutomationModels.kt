@@ -151,6 +151,52 @@ data class LocationRule(
 }
 
 @Serializable
+data class CalendarRule(
+  val id: String,
+  val name: String,
+  val enabled: Boolean = true,
+  val calendarIds: Set<Long> = emptySet(),
+  val busyOnly: Boolean = true,
+  val ignoreAllDayEvents: Boolean = true,
+  val keywordFilter: String = "",
+  val targetProfileId: String,
+  val highPriority: Boolean = false,
+)
+
+data class DeviceCalendarInfo(
+  val id: Long,
+  val displayName: String,
+  val accountName: String,
+  val visible: Boolean = true,
+)
+
+data class CalendarEventInstance(
+  val eventId: Long,
+  val calendarId: Long,
+  val title: String,
+  val description: String = "",
+  val beginMillis: Long,
+  val endMillis: Long,
+  val availability: Int,
+  val allDay: Boolean = false,
+  val isCancelledOrDeclined: Boolean = false,
+) {
+  companion object {
+    const val AVAILABILITY_BUSY = 0
+    const val AVAILABILITY_FREE = 1
+    const val AVAILABILITY_TENTATIVE = 2
+  }
+}
+
+data class ActiveCalendarEventWindow(
+  val ruleId: String,
+  val eventId: Long,
+  val eventTitle: String,
+  val beginMillis: Long,
+  val endMillis: Long,
+)
+
+@Serializable
 enum class ThemeMode {
   SYSTEM,
   LIGHT,
@@ -200,6 +246,7 @@ enum class TransitionTriggerSource {
   MANUAL,
   TIMER,
   SCHEDULE,
+  CALENDAR,
   LOCATION,
   RESTORE,
   BOOT,

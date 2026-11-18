@@ -39,6 +39,7 @@ object AppTestTags {
   object Fab {
     const val SAVE_PROFILE_BUTTON = "save_profile_button"
     const val ADD_SCHEDULE_FAB = "add_schedule_fab"
+    const val ADD_CALENDAR_RULE_FAB = "add_calendar_rule_fab"
     const val ADD_LOCATION_FAB = "add_location_fab"
   }
 
@@ -111,6 +112,8 @@ object AppTestTags {
 
   object Schedules {
     const val LIST = "schedules_tab_list"
+    const val SEGMENT_FIXED = "schedules_segment_fixed"
+    const val SEGMENT_CALENDAR = "schedules_segment_calendar"
     const val EXACT_ALARM_BANNER = "schedules_exact_alarm_banner"
     const val AUTHORIZE_EXACT_ALARM_BUTTON = "schedules_authorize_exact_alarm_button"
     const val DELETE_TOP_BUTTON = "delete_schedule_top_button"
@@ -124,6 +127,32 @@ object AppTestTags {
     fun menuDuplicateItem(ruleId: String): String = "schedule_menu_duplicate_$ruleId"
     fun menuToggleItem(ruleId: String): String = "schedule_menu_toggle_$ruleId"
     fun menuDeleteItem(ruleId: String): String = "schedule_menu_delete_$ruleId"
+  }
+
+  object CalendarRules {
+    const val LIST = "calendar_rules_tab_list"
+    const val PERMISSION_CARD = "calendar_permission_card"
+    const val GRANT_PERMISSION_BUTTON = "calendar_grant_permission_button"
+    const val DISCLOSURE_DIALOG = "calendar_disclosure_dialog"
+    const val ACCEPT_DISCLOSURE_BUTTON = "calendar_accept_disclosure_button"
+    const val DISMISS_DISCLOSURE_BUTTON = "calendar_dismiss_disclosure_button"
+    const val DELETE_TOP_BUTTON = "delete_calendar_rule_top_button"
+    const val CONFIRM_SAVE_BUTTON = "confirm_save_calendar_rule_button"
+    const val NAME_INPUT = "calendar_rule_name_input"
+    const val BUSY_ONLY_SWITCH = "calendar_rule_busy_only_switch"
+    const val IGNORE_ALL_DAY_SWITCH = "calendar_rule_ignore_all_day_switch"
+    const val KEYWORD_INPUT = "calendar_rule_keyword_input"
+    const val HIGH_PRIORITY_SWITCH = "calendar_rule_high_priority_switch"
+
+    fun card(ruleId: String): String = "calendar_rule_card_$ruleId"
+    fun switch(ruleId: String): String = "calendar_rule_switch_$ruleId"
+    fun optionsButton(ruleId: String): String = "calendar_rule_options_$ruleId"
+    fun menuEditItem(ruleId: String): String = "calendar_rule_menu_edit_$ruleId"
+    fun menuDuplicateItem(ruleId: String): String = "calendar_rule_menu_duplicate_$ruleId"
+    fun menuToggleItem(ruleId: String): String = "calendar_rule_menu_toggle_$ruleId"
+    fun menuDeleteItem(ruleId: String): String = "calendar_rule_menu_delete_$ruleId"
+    fun profileChip(profileId: String): String = "calendar_rule_profile_chip_$profileId"
+    fun calendarFilterChip(calendarId: Long): String = "calendar_filter_chip_$calendarId"
   }
 
   object Locations {
@@ -210,6 +239,7 @@ object AppTestTags {
     fun defaultTimerChip(minutes: Int): String = "settings_default_timer_chip_$minutes"
     fun historyFilterChip(filterName: String): String = "settings_history_filter_$filterName"
     const val REOPEN_ONBOARDING_BUTTON = "settings_reopen_onboarding_button"
+    const val GRANT_CALENDAR_PERMISSION_BUTTON = "settings_grant_calendar_permission_button"
     const val WRITE_SETTINGS_PERMISSION_CARD = "settings_write_settings_permission_card"
     const val NOTIFICATION_PERMISSION_BANNER = "settings_notification_permission_banner"
     const val AUTHORIZE_NOTIFICATION_PERMISSION_BUTTON = "settings_authorize_notification_permission_button"

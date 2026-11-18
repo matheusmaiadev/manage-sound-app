@@ -1,5 +1,8 @@
 package com.managesoundmode.app.domain.engine
 
+import com.managesoundmode.app.domain.model.ActiveCalendarEventWindow
+import com.managesoundmode.app.domain.model.CalendarEventInstance
+import com.managesoundmode.app.domain.model.CalendarRule
 import com.managesoundmode.app.domain.model.LocationRule
 import com.managesoundmode.app.domain.model.RestorePolicy
 import com.managesoundmode.app.domain.model.SavedStateSnapshot
@@ -54,6 +57,8 @@ object RuleEvaluator {
     profiles: List<SoundProfile>,
     scheduleRules: List<ScheduleRule>,
     locationRules: List<LocationRule>,
+    calendarRules: List<CalendarRule> = emptyList(),
+    activeCalendarWindows: List<ActiveCalendarEventWindow> = emptyList(),
     activeTimer: TimedModeSession?,
     overriddenSessionKey: String?,
     restorePolicy: RestorePolicy,
@@ -73,7 +78,7 @@ object RuleEvaluator {
       ?: profiles.firstOrNull()
       ?: SoundProfile.defaultPresets.first()
 
-    // 2. Coleta regras de horário e de local ativas neste instante
+    // 2. Coleta regras de horário, local e agenda ativas neste instante
     val activeCandidates = mutableListOf<ActiveRuleCandidate>()
 
     for (schedule in scheduleRules) {
@@ -112,12 +117,37 @@ object RuleEvaluator {
       }
     }
 
-    // 3. Se houver regras ativas, desempata conforme a Matriz de Precedência (Estudo 03)
+    val calendarRulesById = calendarRules.associateBy { it.id }
+    for (window in activeCalendarWindows) {
+      val rule = calendarRulesById[window.ruleId]
+      if (rule != null && rule.enabled) {
+        val profile = profilesById[rule.targetProfileId] ?: fallbackProfile
+        activeCandidates += ActiveRuleCandidate(
+          ruleId = rule.id,
+          ruleName = rule.name,
+          subtitle = "Agenda • ${window.eventTitle}",
+          source = TransitionTriggerSource.CALENDAR,
+          profile = profile,
+          highPriority = rule.highPriority,
+          sessionKey = "calendar:${rule.id}:${window.eventId}:${window.beginMillis}",
+        )
+      }
+    }
+
+    // 3. Se houver regras ativas, desempata conforme a Matriz de Precedência (SPEC-004 e SPEC-008)
     if (activeCandidates.isNotEmpty()) {
       val sorted = activeCandidates.sortedWith(
         compareByDescending<ActiveRuleCandidate> { it.highPriority }
           .thenByDescending { it.profile.resolvedSoundState.restrictivenessRank }
-          .thenBy { if (it.source == TransitionTriggerSource.SCHEDULE) 0 else 1 },
+          .thenBy { candidate ->
+            when (candidate.source) {
+              TransitionTriggerSource.CALENDAR -> 0
+              TransitionTriggerSource.SCHEDULE -> 1
+              TransitionTriggerSource.LOCATION -> 2
+              else -> 3
+            }
+          }
+          .thenBy { it.ruleId },
       )
       val winner = sorted.first()
 
@@ -235,5 +265,121 @@ object RuleEvaluator {
     }
 
     return earliestCandidateMillis
+  }
+
+  /**
+   * Avalia se uma [CalendarEventInstance] atende aos critérios e filtros de uma [CalendarRule]
+   * no instante [nowEpochMillis].
+   */
+  fun matchesCalendarEvent(
+    rule: CalendarRule,
+    instance: CalendarEventInstance,
+    nowEpochMillis: Long,
+  ): Boolean {
+    if (!rule.enabled || instance.isCancelledOrDeclined) return false
+    if (instance.endMillis <= instance.beginMillis) return false
+    if (nowEpochMillis !in instance.beginMillis until instance.endMillis) return false
+    if (rule.calendarIds.isNotEmpty() && instance.calendarId !in rule.calendarIds) return false
+    if (rule.ignoreAllDayEvents && instance.allDay) return false
+    if (rule.busyOnly && instance.availability != CalendarEventInstance.AVAILABILITY_BUSY) return false
+    if (rule.keywordFilter.isNotBlank()) {
+      val tokens = rule.keywordFilter.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+      if (tokens.isNotEmpty()) {
+        val matchesToken = tokens.any { token ->
+          instance.title.contains(token, ignoreCase = true) ||
+            instance.description.contains(token, ignoreCase = true)
+        }
+        if (!matchesToken) return false
+      }
+    }
+    return true
+  }
+
+  /**
+   * Resolve todas as janelas ativas de compromissos de calendário que atendem às regras cadastradas.
+   */
+  fun resolveCalendarWindows(
+    rules: List<CalendarRule>,
+    instances: List<CalendarEventInstance>,
+    nowEpochMillis: Long,
+  ): List<ActiveCalendarEventWindow> {
+    val enabledRules = rules.filter { it.enabled }
+    if (enabledRules.isEmpty() || instances.isEmpty()) return emptyList()
+
+    val windows = mutableListOf<ActiveCalendarEventWindow>()
+    for (rule in enabledRules) {
+      for (instance in instances) {
+        if (matchesCalendarEvent(rule, instance, nowEpochMillis)) {
+          windows += ActiveCalendarEventWindow(
+            ruleId = rule.id,
+            eventId = instance.eventId,
+            eventTitle = instance.title,
+            beginMillis = instance.beginMillis,
+            endMillis = instance.endMillis,
+          )
+        }
+      }
+    }
+    return windows
+  }
+
+  /**
+   * Calcula o próximo limite (beginMillis ou endMillis) de qualquer instância de evento de calendário
+   * elegível que ocorrerá após [nowEpochMillis].
+   */
+  fun computeNextCalendarBoundaryMillis(
+    calendarRules: List<CalendarRule>,
+    instances: List<CalendarEventInstance>,
+    nowEpochMillis: Long,
+  ): Long? {
+    val enabledRules = calendarRules.filter { it.enabled }
+    if (enabledRules.isEmpty() || instances.isEmpty()) return null
+
+    var earliestMillis: Long? = null
+    for (rule in enabledRules) {
+      for (instance in instances) {
+        if (instance.isCancelledOrDeclined) continue
+        if (instance.endMillis <= instance.beginMillis) continue
+        if (rule.calendarIds.isNotEmpty() && instance.calendarId !in rule.calendarIds) continue
+        if (rule.ignoreAllDayEvents && instance.allDay) continue
+        if (rule.busyOnly && instance.availability != CalendarEventInstance.AVAILABILITY_BUSY) continue
+        if (rule.keywordFilter.isNotBlank()) {
+          val tokens = rule.keywordFilter.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+          if (tokens.isNotEmpty()) {
+            val matchesToken = tokens.any { token ->
+              instance.title.contains(token, ignoreCase = true) ||
+                instance.description.contains(token, ignoreCase = true)
+            }
+            if (!matchesToken) continue
+          }
+        }
+        if (instance.beginMillis > nowEpochMillis) {
+          earliestMillis = minOf(earliestMillis ?: Long.MAX_VALUE, instance.beginMillis)
+        }
+        if (instance.endMillis > nowEpochMillis) {
+          earliestMillis = minOf(earliestMillis ?: Long.MAX_VALUE, instance.endMillis)
+        }
+      }
+    }
+    return earliestMillis
+  }
+
+  /**
+   * Calcula o próximo marco de transição unificado, considerando o menor timestamp futuro entre
+   * as regras de horário fixo e os marcos de início/fim de eventos de calendário.
+   */
+  fun computeNextAutomationTransitionMillis(
+    scheduleRules: List<ScheduleRule>,
+    nextCalendarBoundaryMillis: Long? = null,
+    now: ZonedDateTime = ZonedDateTime.now(ZoneId.systemDefault()),
+  ): Long? {
+    val nextScheduleMillis = computeNextScheduleTransitionMillis(scheduleRules, now)
+    return when {
+      nextScheduleMillis != null && nextCalendarBoundaryMillis != null ->
+        minOf(nextScheduleMillis, nextCalendarBoundaryMillis)
+      nextScheduleMillis != null -> nextScheduleMillis
+      nextCalendarBoundaryMillis != null -> nextCalendarBoundaryMillis
+      else -> null
+    }
   }
 }

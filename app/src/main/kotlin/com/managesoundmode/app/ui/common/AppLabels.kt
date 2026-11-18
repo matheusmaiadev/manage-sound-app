@@ -215,6 +215,7 @@ object AppLabels {
         TransitionTriggerSource.MANUAL -> tr("Manual", "Manual")
         TransitionTriggerSource.TIMER -> tr("Timer", "Timer")
         TransitionTriggerSource.SCHEDULE -> tr("Horário", "Schedule")
+        TransitionTriggerSource.CALENDAR -> tr("Agenda", "Calendar")
         TransitionTriggerSource.LOCATION -> tr("Local", "Location")
         TransitionTriggerSource.RESTORE -> tr("Auto-Restore", "Auto-Restore")
         TransitionTriggerSource.BOOT -> tr("Sistema / Boot", "System / Boot")
@@ -277,6 +278,7 @@ object AppLabels {
   object Fab {
     val newProfile: String get() = tr("Novo Perfil", "New Profile")
     val newSchedule: String get() = tr("Novo Horário", "New Schedule")
+    val newCalendarRule: String get() = tr("Nova Regra de Agenda", "New Calendar Rule")
     val newLocation: String get() = tr("Novo Local", "New Location")
   }
 
@@ -494,6 +496,8 @@ object AppLabels {
   }
 
   object Schedules {
+    val segmentFixed: String get() = tr("Horários Fixos", "Fixed Schedules")
+    val segmentCalendar: String get() = tr("Agenda", "Calendar")
     val exactAlarmBannerTitle: String
       get() = tr(
         "Autorize alarmes exatos para pontualidade",
@@ -535,6 +539,99 @@ object AppLabels {
 
     fun optionsContentDescription(name: String): String =
       tr("Opções do horário $name", "Options for schedule $name")
+  }
+
+  object CalendarRules {
+    val tabHint: String
+      get() = tr(
+        "Silencie ou ajuste o som automaticamente conforme eventos da sua agenda local",
+        "Silence or adjust sound automatically according to local calendar events",
+      )
+    val permissionCardTitle: String
+      get() = tr("Automação por Agenda (100% On-Device)", "Calendar Automation (100% On-Device)")
+    val permissionCardSubtitle: String
+      get() = tr(
+        "Silencie o aparelho automaticamente durante reuniões e compromissos marcados como ocupados. O aplicativo lê os eventos diretamente do seu aparelho, sem enviar nenhum dado para servidores externos.",
+        "Automatically silence your device during meetings and busy events. The app reads events directly on-device without sending data to external servers.",
+      )
+    val grantPermissionButton: String
+      get() = tr("Autorizar Agenda", "Grant Calendar Access")
+    val disclosureTitle: String
+      get() = tr("Permissão de Leitura de Agenda", "Calendar Read Permission")
+    val disclosureMessage: String
+      get() = tr(
+        "Para silenciar o som durante compromissos e reuniões, o Manage Sound Mode precisa ler os horários e títulos dos eventos do seu calendário local.\n\nPrivacidade 100% On-Device: nenhum evento é enviado para fora do dispositivo.",
+        "To silence audio during meetings and appointments, Manage Sound Mode needs to read event times and titles from your local calendar.\n\n100% On-Device Privacy: no event data ever leaves your device.",
+      )
+    val disclosureContinue: String
+      get() = tr("Continuar", "Continue")
+    val disclosureDismiss: String
+      get() = tr("Agora não", "Not now")
+    val emptyListTitle: String
+      get() = tr("Nenhuma regra de agenda", "No calendar rules")
+    val emptyListSubtitle: String
+      get() = tr(
+        "Crie regras para silenciar o telefone automaticamente em reuniões, aulas ou consultas médicas.",
+        "Create rules to automatically silence your phone during meetings, classes, or appointments.",
+      )
+    val editorTitleNew: String
+      get() = tr("Nova Regra de Agenda", "New Calendar Rule")
+    val editorTitleEdit: String
+      get() = tr("Editar Regra de Agenda", "Edit Calendar Rule")
+    val nameLabel: String
+      get() = tr("Nome da Regra", "Rule Name")
+    val namePlaceholder: String
+      get() = tr("Ex.: Reuniões de Trabalho, Aulas...", "e.g., Work Meetings, Classes...")
+    val calendarsSectionTitle: String
+      get() = tr("Agendas do Dispositivo", "Device Calendars")
+    val allCalendarsOption: String
+      get() = tr("Todas as agendas visíveis", "All visible calendars")
+    val busyOnlyTitle: String
+      get() = tr("Apenas eventos \"Ocupado\" (Busy)", "Only \"Busy\" events")
+    val busyOnlySubtitle: String
+      get() = tr("Ignora eventos livres ou informativos", "Ignores free or tentative events")
+    val ignoreAllDayTitle: String
+      get() = tr("Ignorar eventos de dia inteiro", "Ignore all-day events")
+    val ignoreAllDaySubtitle: String
+      get() = tr("Evita silenciar o dia inteiro em aniversários ou feriados", "Avoids silencing all day for birthdays or holidays")
+    val keywordFilterLabel: String
+      get() = tr("Filtro por palavra-chave (opcional)", "Keyword filter (optional)")
+    val keywordFilterPlaceholder: String
+      get() = tr("Ex.: Reunião, Daily, Consulta (separadas por vírgula)", "e.g., Meeting, Daily, Doctor (comma-separated)")
+    val targetProfileTitle: String
+      get() = tr("Perfil de Som Aplicado", "Applied Sound Profile")
+    val highPriorityTitle: String
+      get() = tr("Sobrepor outras regras (Alta prioridade)", "Override other rules (High priority)")
+    val highPrioritySubtitle: String
+      get() = tr("Prevalece sobre horários fixos e locais comuns", "Prevails over standard schedules and locations")
+    val confirmSave: String
+      get() = tr("Salvar Regra", "Save Rule")
+    val chipBusyOnly: String
+      get() = tr("Apenas Ocupado", "Busy Only")
+    val chipAnyAvailability: String
+      get() = tr("Qualquer disponibilidade", "Any Availability")
+    val chipAllCalendars: String
+      get() = tr("Todas as agendas", "All Calendars")
+    fun chipCalendarsCount(count: Int): String =
+      tr("$count agendas", "$count calendars")
+    fun chipKeyword(filter: String): String =
+      tr("Filtro: \"$filter\"", "Filter: \"$filter\"")
+    val chipHighPriority: String
+      get() = tr("Alta Prioridade", "High Priority")
+    val chipIgnoreAllDay: String
+      get() = tr("Ignora dia inteiro", "Ignores all-day")
+    val ruleDeletedSnackbar: String
+      get() = tr("Regra de agenda excluída", "Calendar rule deleted")
+    val ruleSavedSnackbar: String
+      get() = tr("Regra de agenda salva", "Calendar rule saved")
+    val editRuleMenu: String get() = tr("Editar regra", "Edit rule")
+    val duplicateRuleMenu: String get() = tr("Duplicar regra", "Duplicate rule")
+    val enableRuleMenu: String get() = tr("Ativar regra", "Enable rule")
+    val disableRuleMenu: String get() = tr("Desativar regra", "Disable rule")
+    val deleteRuleMenu: String get() = tr("Excluir regra", "Delete rule")
+
+    fun optionsContentDescription(name: String): String =
+      tr("Opções da regra $name", "Options for rule $name")
   }
 
   object Locations {
@@ -878,9 +975,15 @@ object AppLabels {
     val locationPermissionPendingSubtitle: String
       get() = tr("Opcional • Conceda na aba Locais se usar cercas", "Optional • Grant in Locations tab if using geofences")
 
+    val calendarPermissionTitle: String
+      get() = tr("Agenda / Calendário (Opcional)", "Calendar (Optional)")
+    val optionalCalendarPermissionSubtitle: String
+      get() = tr("Opcional (Não solicitado)", "Optional (Not requested)")
+
     val filterAll: String get() = tr("Todos", "All")
     val filterManual: String get() = tr("Manual", "Manual")
     val filterSchedule: String get() = tr("Horário", "Schedule")
+    val filterCalendar: String get() = tr("Agenda", "Calendar")
     val filterLocation: String get() = tr("Local", "Location")
     val filterShortcuts: String get() = tr("Atalhos", "Shortcuts")
 
