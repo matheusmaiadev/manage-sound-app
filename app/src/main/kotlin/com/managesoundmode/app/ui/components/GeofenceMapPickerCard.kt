@@ -365,14 +365,14 @@ fun GeofenceMapPickerCard(
                 allowContentAccess = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                userAgentString = "ModosDeSomAndroid/0.3.1 (OpenStreetMap Geofence Picker)"
+                userAgentString = "ManageSoundMode/0.4.0 (Android Geofence Picker)"
               }
               webChromeClient = WebChromeClient()
               webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
                   view: WebView?,
                   request: WebResourceRequest?,
-                ): Boolean = true
+                ): Boolean = false
               }
               addJavascriptInterface(
                 OsmWebMapBridge(
@@ -400,7 +400,7 @@ fun GeofenceMapPickerCard(
                 false
               }
               loadDataWithBaseURL(
-                "https://openstreetmap.org",
+                "https://managesoundmode.app",
                 htmlContent,
                 "text/html",
                 "UTF-8",
@@ -606,14 +606,16 @@ private fun buildLeafletMapHtml(
   initialRadius: Int,
   isDark: Boolean,
 ): String {
-  val tileUrl = if (isDark) {
-    "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-  } else {
-    "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-  }
+  val tileUrl = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+  val tileFallbackUrl = "https://services.arcgisonline.com/arcgis/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
   val pinHex = if (isDark) "#2DD4BF" else "#0F766E"
   val circleStrokeHex = if (isDark) "#2DD4BF" else "#0F766E"
   val circleFillHex = if (isDark) "#14B8A6" else "#2DD4BF"
+  val darkTileFilterCss = if (isDark) {
+    ".leaflet-tile-pane { filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(90%); }"
+  } else {
+    ""
+  }
 
   return """
     <!DOCTYPE html>
@@ -621,6 +623,7 @@ private fun buildLeafletMapHtml(
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <meta name="referrer" content="no-referrer" />
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
       <style>
@@ -644,6 +647,7 @@ private fun buildLeafletMapHtml(
           border: 3px solid #FFFFFF;
           box-shadow: 0 2px 10px rgba(20,184,166,0.55);
         }
+        $darkTileFilterCss
       </style>
     </head>
     <body>
@@ -672,13 +676,13 @@ private fun buildLeafletMapHtml(
 
           var primaryLayer = L.tileLayer('$tileUrl', {
             maxZoom: 19,
-            subdomains: 'abcd',
-            attribution: '&copy; OpenStreetMap'
+            attribution: 'Tiles &copy; Esri & OpenStreetMap'
           }).addTo(map);
 
           primaryLayer.on('tileerror', function() {
-            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              maxZoom: 19
+            L.tileLayer('$tileFallbackUrl', {
+              maxZoom: 19,
+              attribution: 'Tiles &copy; Esri'
             }).addTo(map);
           });
 
