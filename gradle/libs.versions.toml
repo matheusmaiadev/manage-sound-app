@@ -19,7 +19,7 @@ kotlin = "2.3.20"
 nav3Core = "1.0.1"
 lifecycleViewmodelNav3 = "2.10.0"
 turbine = "1.2.0"
-billingKtx = "7.1.1"
+billingKtx = "8.0.0"
 
 [libraries]
 google-play-billing-ktx = { module = "com.android.billingclient:billing-ktx", version.ref = "billingKtx" }
